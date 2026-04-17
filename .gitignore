@@ -1,4 +1,5 @@
 __pycache__/
+.pytest_cache/
 # Runtime files created by the daemon (user-specific, never commit).
 .config/
 .cache/

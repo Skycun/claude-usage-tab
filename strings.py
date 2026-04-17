@@ -145,16 +145,27 @@ _current_lang = DEFAULT_LANG
 _missing_keys_warned: set[str] = set()
 
 
+def _system_lang() -> str:
+    """Best-effort read of the system UI language from standard env vars.
+
+    ``locale.getdefaultlocale`` is deprecated for removal in Python 3.15,
+    so we parse the POSIX locale vars ourselves. The returned string is
+    the 2-letter prefix (e.g. ``"fr"`` from ``"fr_FR.UTF-8"``) or ``""``.
+    """
+    for var in ("LC_ALL", "LC_MESSAGES", "LANG", "LANGUAGE"):
+        raw = os.environ.get(var, "")
+        if raw and raw not in ("C", "POSIX"):
+            return raw.split(".")[0].split("_")[0].lower()
+    return ""
+
+
 def detect_lang(settings_lang: str | None = None) -> str:
     """Return the active language. Env > settings > system > default."""
     env = os.environ.get("CLAUDE_USAGE_LANG", "").strip().lower()
     for candidate in (env, (settings_lang or "").strip().lower()):
         if candidate in SUPPORTED_LANGS:
             return candidate
-    try:
-        sys_lang = (locale.getdefaultlocale()[0] or "").split("_")[0].lower()
-    except (ValueError, locale.Error):
-        sys_lang = ""
+    sys_lang = _system_lang()
     if sys_lang in SUPPORTED_LANGS:
         return sys_lang
     return DEFAULT_LANG
