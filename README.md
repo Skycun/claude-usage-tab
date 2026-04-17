@@ -274,6 +274,21 @@ migrate to it.
 
 ---
 
+## Running the tests
+
+Pure-logic modules (`strings`, `settings`, `alerts`) have pytest
+coverage. GUI code in `claude_usage_indicator.py` is verified manually
+by running the daemon.
+
+```bash
+# Ubuntu: pytest ships as a system package, no venv needed.
+sudo apt install python3-pytest
+python3 -m pytest tests/
+```
+
+CI runs `py_compile` + pytest on Python 3.10/3.11/3.12 and a bandit
+security scan on every PR (see `.github/workflows/ci.yml`).
+
 ## License
 
-Personal project. Pick a license before making the repo public.
+MIT — see [LICENSE](LICENSE).

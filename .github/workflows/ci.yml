@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: py${{ matrix.python }} · syntax + tests
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Syntax check
+        # py_compile parses but doesn't execute imports, so we can syntax-
+        # check the gi-importing main module without installing PyGObject.
+        run: python -m py_compile strings.py settings.py alerts.py api.py claude_usage_indicator.py
+      - name: Install test deps
+        run: pip install --upgrade pip pytest requests
+      - name: Run tests
+        run: python -m pytest tests/ -v
+
+  security:
+    name: bandit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install bandit
+        run: pip install --upgrade pip bandit
+      - name: Run bandit
+        # B404 (import subprocess), B603 (no shell=True), B607 (partial
+        # executable path) are expected: the daemon launches the user's
+        # terminal and xdg-open via PATH, which is the standard pattern
+        # on Linux desktops. All Popen calls use fixed list args.
+        run: bandit -r . --exclude ./tests,./.github --skip B404,B603,B607

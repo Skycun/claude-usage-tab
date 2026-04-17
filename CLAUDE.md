@@ -76,8 +76,12 @@ Runtime files (never committed):
 ## How to test a change
 
 ```bash
-# syntax check
-python3 -c "import ast; ast.parse(open('claude_usage_indicator.py').read())"
+# unit tests (pure-logic modules)
+python3 -m pytest tests/
+
+# syntax check everything
+python3 -m py_compile strings.py settings.py alerts.py api.py \
+                      claude_usage_indicator.py
 
 # restart daemon
 pkill -f claude_usage_indicator.py
@@ -89,8 +93,10 @@ disown
 tail -f /tmp/claude_usage_indicator.log
 ```
 
-There are no unit tests. The only way to verify is to run the daemon
-and look at the GNOME top bar.
+`strings`, `settings`, and `alerts` have unit-test coverage; the GTK UI
+in `claude_usage_indicator.py` is verified only by eyeballing the top
+bar. **If you change pure-logic code, add or update a test** —
+ci.yml will gate PRs on ``pytest``.
 
 ---
 
