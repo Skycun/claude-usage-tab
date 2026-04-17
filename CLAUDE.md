@@ -20,12 +20,24 @@ User-facing overview, install, and troubleshooting: [README.md](./README.md).
 ## Layout
 
 ```
-claude_usage_indicator.py    # ~500 lines — the entire daemon
+claude_usage_indicator.py    # Indicator class + main() — the UI
+strings.py                   # i18n (FR/EN) — STRINGS dict + t()
+settings.py                  # ~/.config/claude-usage-indicator/settings.json
+api.py                       # OAuth token + /api/oauth/usage fetcher
+alerts.py                    # history (~/.cache/.../history.jsonl) + engine
 icons/                       # default, gray, full PNGs (bundled)
 test_claude_usage.sh         # one-shot curl to the OAuth endpoint
 ```
 
-No package, no venv, no build. One script, three icons.
+No package, no venv, no build. Five sibling modules importing each other
+directly — **not** a package (no ``__init__.py``). Dependencies are
+shallow: ``strings`` is a leaf, ``settings`` and ``api`` depend only on
+``strings``, ``alerts`` depends on ``settings``, and the main script
+imports all four.
+
+Runtime files (never committed):
+- ``~/.config/claude-usage-indicator/settings.json`` — user config, auto-created on first run
+- ``~/.cache/claude-usage-indicator/history.jsonl`` — 72 h of ``(ts, metric, util)`` samples
 
 ---
 
@@ -50,6 +62,14 @@ No package, no venv, no build. One script, three icons.
    Handle it via the existing exponential-backoff path — keep stats
    visible, switch icon to gray, retry later. Never surface it as a red
    warning.
+
+5. **Never write user identifiers to ``history.jsonl``.** Only
+   ``(ts, metric, util)`` triples. No email, no token, no account id.
+   The cache is not encrypted and the user may share it when debugging.
+
+6. **New user-visible strings go through ``strings.py``.** Always add
+   both FR and EN keys. Missing EN falls back to FR with a stderr
+   warning — fine for debugging, not OK to ship.
 
 ---
 

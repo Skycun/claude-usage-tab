@@ -1,4 +1,7 @@
 __pycache__/
+# Runtime files created by the daemon (user-specific, never commit).
+.config/
+.cache/
 *.pyc
 *.pyo
 *.pyd
