@@ -8,6 +8,13 @@
 
 set -euo pipefail
 
+for cmd in jq curl; do
+  command -v "$cmd" >/dev/null 2>&1 || {
+    echo "ERROR: '$cmd' is required but not installed." >&2
+    exit 1
+  }
+done
+
 CREDS="$HOME/.claude/.credentials.json"
 
 if [ ! -f "$CREDS" ]; then

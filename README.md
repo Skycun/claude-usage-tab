@@ -16,7 +16,8 @@ to check how much budget you have left.
 
 ## Features
 
-- **Top-bar label** — `5h 17%  ·  7j 5%`, updated every 60s.
+- **Top-bar label** — `5h 17%  ·  7j 5%`, updated every 60s. Prefixed
+  with `/!\ ` when a custom alert is active.
 - **Dynamic icon** — three states at a glance:
   - ⬛ *Default* — normal usage.
   - ⬜ *Gray* — no active session (5h window at 0%) **or** endpoint
@@ -28,17 +29,26 @@ to check how much budget you have left.
   - Session 5h + weekly 7j with progress bars and reset countdowns.
   - Sonnet-specific sub-limit when present.
   - Extra-usage credits when enabled.
+  - Active alerts block + *Clear alerts* button when any are firing.
+  - *Edit settings* item — opens `settings.json` in the default editor.
   - One-click refresh with last-update timestamp.
+- **Bilingual UI** — French (default) and English. Switch with
+  `CLAUDE_USAGE_LANG=en` or by editing `settings.json`.
+- **Custom rate alerts** — e.g. "warn me when my weekly usage grows by
+  more than 20 pp over a 12 h sliding window". Defined in
+  `settings.json` (see [Settings](#settings)).
 - **Desktop notifications**
   - When the 5h or weekly window resets.
-  - When utilization crosses 80% and 95%.
+  - When utilization crosses 80% and 95% (configurable).
+  - When a custom rate alert fires.
 - **Graceful degradation**
-  - If the token is missing or expired: switches to a *“not connected”*
+  - If the token is missing or expired: switches to a *"not connected"*
     layout with a *Connect* button that launches `claude` in a terminal.
   - If the endpoint returns `rate_limit_error` (a known Anthropic-side
     bug — see [claude-code #31021][issue-31021]): keeps the last-known
     stats on screen, switches to the gray icon, retries with exponential
-    backoff (2min → 5min → 15min → 30min → 1h).
+    backoff (2min → 5min → 15min → 30min → 1h). Honours `Retry-After`
+    when the server sends it.
 
 ---
 
@@ -175,11 +185,61 @@ endpoint is rate-limited. Open the menu — the refresh line will say
 
 ---
 
+## Settings
+
+The daemon writes `~/.config/claude-usage-indicator/settings.json` on
+first run. Edit it to tweak behaviour — changes are picked up on the
+next tick (no restart required). Invalid JSON or invalid fields are
+logged to stderr and the defaults are kept in memory.
+
+```jsonc
+{
+  "schema_version": 1,
+  "lang": "fr",              // "fr" or "en"
+  "poll_seconds": 60,        // minimum 10
+  "builtin_thresholds": [80, 95],
+  "alerts": [
+    {
+      "id": "daily-burn",
+      "enabled": false,
+      "metric": "seven_day",       // five_hour | seven_day | seven_day_sonnet
+      "delta_pp": 20,              // trigger when delta > 20 percentage points
+      "window_hours": 12,          // sliding window size
+      "cooldown_hours": 6,         // silence window after firing
+      "label": "Conso hebdo rapide"
+    }
+  ]
+}
+```
+
+### Custom rate alerts
+
+Each alert watches one metric over a sliding time window. An alert
+**fires** when utilisation has grown by at least `delta_pp` percentage
+points over the last `window_hours`. When it fires:
+
+- A desktop notification is sent with the alert's `label`.
+- The top-bar label gets a `/!\ ` prefix.
+- A *Clear alerts* item appears in the menu (you can also wait — the
+  prefix disappears automatically when the metric resets or after
+  `cooldown_hours` if you edit the alert to disable it).
+
+Alerts are re-armed when the metric itself resets (drop > 5 pp) or when
+you hit *Clear alerts*. There's a 5-minute quiet period at startup so
+history can build up.
+
+Env var `CLAUDE_USAGE_LANG=fr|en` overrides the file's `lang` value —
+useful when testing.
+
 ## Project layout
 
 ```
 claude-usage-tab/
-├── claude_usage_indicator.py   # main daemon
+├── claude_usage_indicator.py   # Indicator class + main()
+├── strings.py                  # i18n (FR + EN)
+├── settings.py                 # settings.json schema + loader
+├── api.py                      # token + /api/oauth/usage fetcher
+├── alerts.py                   # usage history + alert engine
 ├── test_claude_usage.sh        # one-shot endpoint tester
 ├── icons/
 │   ├── claude.png              # default state
