@@ -59,11 +59,14 @@ SETTINGS_URL = "https://claude.ai/settings/usage"
 # precedence.
 _REPO_ICONS = Path(__file__).resolve().parent / "icons"
 _XDG_ICONS = Path.home() / ".local/share/claude-usage-indicator"
-_ICON_DIR = _XDG_ICONS if _XDG_ICONS.exists() else _REPO_ICONS
-ICON_DEFAULT = _ICON_DIR / "claude.png"
-ICON_GRAY = _ICON_DIR / "gray-claude.png"
-ICON_FULL = _ICON_DIR / "full-claude.png"
 FALLBACK_ICON = "dialog-information-symbolic"
+
+
+def _icon_path(name: str) -> Path:
+    # Resolve per-call so a user dropping files into the XDG dir is picked
+    # up on the next tick without restarting the daemon.
+    xdg = _XDG_ICONS / name
+    return xdg if xdg.exists() else _REPO_ICONS / name
 
 
 def pick_icon(f_util: float, s_util: float) -> str:
@@ -73,13 +76,21 @@ def pick_icon(f_util: float, s_util: float) -> str:
     * gray-claude.png when no session has started (5h window at 0%)
     * claude.png otherwise
     """
-    if ICON_FULL.exists() and (f_util >= 100 or s_util >= 100):
-        return str(ICON_FULL)
-    if ICON_GRAY.exists() and f_util == 0:
-        return str(ICON_GRAY)
-    if ICON_DEFAULT.exists():
-        return str(ICON_DEFAULT)
+    full = _icon_path("full-claude.png")
+    gray = _icon_path("gray-claude.png")
+    default = _icon_path("claude.png")
+    if full.exists() and (f_util >= 100 or s_util >= 100):
+        return str(full)
+    if gray.exists() and f_util == 0:
+        return str(gray)
+    if default.exists():
+        return str(default)
     return FALLBACK_ICON
+
+
+def _gray_icon() -> str:
+    gray = _icon_path("gray-claude.png")
+    return str(gray) if gray.exists() else FALLBACK_ICON
 
 
 def spawn_claude_login() -> bool:
@@ -111,32 +122,30 @@ _TIER_LABELS = {
 }
 
 
-def read_token() -> str | None:
+def _safe_load_json(path: Path) -> dict:
     try:
-        data = json.loads(CREDS_PATH.read_text())
+        return json.loads(path.read_text())
     except (FileNotFoundError, json.JSONDecodeError):
-        return None
+        return {}
+
+
+def read_token() -> str | None:
+    data = _safe_load_json(CREDS_PATH)
     oauth = data.get("claudeAiOauth") or {}
     return oauth.get("accessToken") or data.get("accessToken")
 
 
 def read_account() -> str:
     """Return a one-line account description: 'email · Plan'."""
-    email = None
-    tier = None
-    try:
-        cfg = json.loads(CONFIG_PATH.read_text())
-        account = cfg.get("oauthAccount") or {}
-        email = account.get("emailAddress") or account.get("displayName")
-    except (FileNotFoundError, json.JSONDecodeError):
-        pass
-    try:
-        creds = json.loads(CREDS_PATH.read_text())
-        oauth = creds.get("claudeAiOauth") or {}
-        raw = oauth.get("rateLimitTier") or oauth.get("subscriptionType")
-        tier = _TIER_LABELS.get(raw, raw)
-    except (FileNotFoundError, json.JSONDecodeError):
-        pass
+    cfg = _safe_load_json(CONFIG_PATH)
+    account = cfg.get("oauthAccount") or {}
+    email = account.get("emailAddress") or account.get("displayName")
+
+    creds = _safe_load_json(CREDS_PATH)
+    oauth = creds.get("claudeAiOauth") or {}
+    raw = oauth.get("rateLimitTier") or oauth.get("subscriptionType")
+    tier = _TIER_LABELS.get(raw, raw) if raw else None
+
     parts = [p for p in (email, tier) if p]
     return "  ·  ".join(parts) if parts else "Compte inconnu"
 
@@ -153,9 +162,17 @@ def fetch_usage(token: str) -> dict:
             timeout=10,
         )
     except requests.RequestException as e:
-        return {"error": str(e)}
+        # Avoid leaking auth-related context via str(e) — just the class.
+        return {"error": f"request failed: {type(e).__name__}"}
     if r.status_code == 429:
-        return {"error": "HTTP 429", "rate_limited": True}
+        out: dict = {"error": "HTTP 429", "rate_limited": True}
+        hint = r.headers.get("Retry-After")
+        if hint:
+            try:
+                out["retry_after"] = max(0, int(hint))
+            except ValueError:
+                pass
+        return out
     if r.status_code != 200:
         return {"error": f"HTTP {r.status_code}"}
     try:
@@ -168,9 +185,14 @@ def parse_iso(s: str | None) -> datetime | None:
     if not s:
         return None
     try:
-        return datetime.fromisoformat(s)
+        dt = datetime.fromisoformat(s)
     except ValueError:
         return None
+    # Treat naive strings as UTC — the OAuth endpoint is in UTC, and
+    # downstream arithmetic compares against an aware "now".
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 def format_remaining(reset: datetime | None) -> str:
@@ -219,8 +241,8 @@ class Indicator:
         self.last_good: dict | None = None
         self.backoff_idx: int = 0
         self.backoff_until: datetime | None = None
-
         self.current_icon: str | None = None
+
         self.ind = AppIndicator.Indicator.new(
             APP_ID,
             pick_icon(0, 0),
@@ -229,7 +251,14 @@ class Indicator:
         self.ind.set_status(AppIndicator.IndicatorStatus.ACTIVE)
         self.ind.set_label(" …", " 5h 100%  ·  7j 100% ")
 
+        self._build_menu()
+        self._set_connected(self.token is not None)
+        self.ind.set_menu(self.menu)
+        Notify.init(APP_ID)
+
+    def _build_menu(self) -> None:
         self.menu = Gtk.Menu()
+
         self.item_account = Gtk.MenuItem(label=read_account())
         self.item_account.set_tooltip_text(f"Ouvrir {SETTINGS_URL}")
         self.item_account.connect(
@@ -276,7 +305,6 @@ class Indicator:
         ):
             self.menu.append(item)
 
-        # Items visible only when a token is present and valid.
         self._connected_only = (
             self.item_session,
             self.item_session_reset,
@@ -289,14 +317,8 @@ class Indicator:
             sep_refresh,
             self.item_refresh,
         )
-        # Items visible only when no token is present.
         self._disconnected_only = (self.item_login,)
-
         self.menu.show_all()
-        self._set_connected(self.token is not None)
-        self.ind.set_menu(self.menu)
-
-        Notify.init(APP_ID)
 
     @staticmethod
     def _info_item(label: str) -> Gtk.MenuItem:
@@ -309,8 +331,10 @@ class Indicator:
         n.set_urgency(Notify.Urgency.CRITICAL if urgent else Notify.Urgency.NORMAL)
         try:
             n.show()
-        except Exception:
-            pass
+        except GLib.Error as e:
+            # libnotify bus not available (headless, locked screen, broken
+            # D-Bus) — log but keep running. Anything else propagates.
+            print(f"notify failed: {e}", file=sys.stderr)
 
     def _set_connected(self, connected: bool) -> None:
         """Toggle the menu between connected and disconnected layouts."""
@@ -350,7 +374,7 @@ class Indicator:
         """
         if self.last_good is not None:
             self._render(self.last_good, fresh=False)
-        icon = str(ICON_GRAY) if ICON_GRAY.exists() else FALLBACK_ICON
+        icon = _gray_icon()
         if icon != self.current_icon:
             self.ind.set_icon_full(icon, "Claude usage — rate-limited")
             self.current_icon = icon
@@ -380,14 +404,14 @@ class Indicator:
         if not self.token:
             self._set_connected(False)
             self.ind.set_label(" non connecté ", " non connecté ")
-            icon = str(ICON_GRAY) if ICON_GRAY.exists() else FALLBACK_ICON
+            icon = _gray_icon()
             if icon != self.current_icon:
                 self.ind.set_icon_full(icon, "Claude usage")
                 self.current_icon = icon
             return True
 
         self._set_connected(True)
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         if self.backoff_until and now < self.backoff_until:
             remaining = int((self.backoff_until - now).total_seconds())
             self._show_rate_limited(remaining)
@@ -395,16 +419,17 @@ class Indicator:
 
         data = fetch_usage(self.token)
         if data.get("rate_limited"):
-            wait = BACKOFF_STAGES[min(self.backoff_idx, len(BACKOFF_STAGES) - 1)]
+            default_wait = BACKOFF_STAGES[min(self.backoff_idx, len(BACKOFF_STAGES) - 1)]
+            wait = int(data.get("retry_after") or default_wait)
             self.backoff_until = now + timedelta(seconds=wait)
             self.backoff_idx = min(self.backoff_idx + 1, len(BACKOFF_STAGES) - 1)
             self._show_rate_limited(wait)
             return True
         if "error" in data:
-            self.ind.set_label("⚠️", "")
+            self.ind.set_label(" !err ", "")
             self.item_session.set_label(f"Erreur : {data['error']}")
             self.item_refresh.set_label(
-                f"Rafraîchir  (échec {now.strftime('%H:%M:%S')})"
+                f"Rafraîchir  (échec {now.astimezone().strftime('%H:%M:%S')})"
             )
             return True
 
