@@ -19,8 +19,9 @@ UI language is FR by default. ``CLAUDE_USAGE_LANG=en`` or ``lang: "en"``
 in ``~/.config/claude-usage-indicator/settings.json`` switches to English.
 
 Deps:
-    sudo apt install gir1.2-ayatanaappindicator3-0.1 python3-gi \\
-                     python3-requests libnotify-bin
+    Run ``./install.sh`` — it detects Ubuntu/Debian vs Fedora/RHEL and
+    installs the right packages. See README.md for the manual per-distro
+    command if you prefer.
 
 Run:
     /usr/bin/python3 claude_usage_indicator.py

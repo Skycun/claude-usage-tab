@@ -8,7 +8,7 @@ and link from here.
 
 ## What this is
 
-Single-file Ubuntu/GNOME AppIndicator that surfaces Claude Code's
+Single-file GNOME AppIndicator (Ubuntu + Fedora) that surfaces Claude Code's
 `/usage` data in the top bar. Polls the undocumented OAuth endpoint
 `https://api.anthropic.com/api/oauth/usage` every 60 s and renders a
 label + dropdown + notifications.

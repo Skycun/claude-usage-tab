@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Claude Usage Tab
+Comment=Claude Code usage indicator in the GNOME top bar
+Exec=/usr/bin/python3 @INSTALL_DIR@/claude_usage_indicator.py
+Icon=@INSTALL_DIR@/icons/claude.png
+Terminal=false
+X-GNOME-Autostart-enabled=true
+Categories=Utility;GTK;

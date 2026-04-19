@@ -1,7 +1,8 @@
 # claude-usage-tab
 
-> Ubuntu / GNOME AppIndicator for **Claude Code** usage — your 5-hour
-> session and 7-day weekly consumption, always visible in the top bar.
+> GNOME AppIndicator (Ubuntu + Fedora) for **Claude Code** usage — your
+> 5-hour session and 7-day weekly consumption, always visible in the top
+> bar.
 
 Same data as `claude /usage`, but glanceable. No need to open a terminal
 to check how much budget you have left.
@@ -76,7 +77,27 @@ Account email and plan tier are read from `~/.claude.json`
 
 ## Install
 
-### 1. System dependencies
+### Quick install (Ubuntu + Fedora)
+
+```bash
+git clone git@github.com:Skycun/claude-usage-tab.git ~/Projects/claude-usage-tab
+cd ~/Projects/claude-usage-tab
+./install.sh
+```
+
+The script reads `/etc/os-release`, picks `apt` or `dnf`, installs the
+system packages, copies the icons to `~/.local/share/claude-usage-indicator/`,
+and drops a `.desktop` file in `~/.config/autostart/` so the indicator
+starts on every login. It is safe to re-run.
+
+On Fedora the GNOME **AppIndicator and KStatusNotifierItem Support**
+extension is not packaged — install it manually from
+<https://extensions.gnome.org/extension/615/appindicator-support/>. The
+script prints a reminder if it is not enabled.
+
+### Manual install
+
+<details><summary>Ubuntu / Debian</summary>
 
 ```bash
 sudo apt install \
@@ -84,17 +105,27 @@ sudo apt install \
   python3-gi \
   python3-requests \
   libnotify-bin
-```
-
-You also need the **AppIndicator and KStatusNotifierItem Support**
-GNOME extension enabled (it ships with Ubuntu by default). If the icon
-doesn't appear:
-
-```bash
 gnome-extensions enable ubuntu-appindicators@ubuntu.com
 ```
 
-### 2. Clone and run
+</details>
+
+<details><summary>Fedora / RHEL</summary>
+
+```bash
+sudo dnf install \
+  libayatana-appindicator-gtk3 \
+  python3-gobject \
+  python3-requests \
+  libnotify
+```
+
+Then enable the AppIndicator extension from
+<https://extensions.gnome.org/extension/615/appindicator-support/>.
+
+</details>
+
+Then clone and run:
 
 ```bash
 git clone git@github.com:Skycun/claude-usage-tab.git ~/Projects/claude-usage-tab
@@ -103,10 +134,10 @@ cd ~/Projects/claude-usage-tab
 ```
 
 > The script uses **system Python** (`/usr/bin/python3`) because
-> PyGObject is provided by the Ubuntu `python3-gi` package and isn't
-> available in most virtualenvs.
+> PyGObject is provided by the distro package (`python3-gi` on Debian,
+> `python3-gobject` on Fedora) and isn't available in most virtualenvs.
 
-### 3. Log in to Claude Code (if you haven't)
+### Log in to Claude Code (if you haven't)
 
 ```bash
 claude       # triggers OAuth login in your browser
@@ -141,18 +172,12 @@ tail -f /tmp/claude_usage_indicator.log
 
 ## Autostart on login
 
-Drop a `.desktop` file in `~/.config/autostart/`:
-
-```ini
-[Desktop Entry]
-Type=Application
-Name=Claude Usage Tab
-Exec=/usr/bin/python3 /home/YOUR_USER/Projects/claude-usage-tab/claude_usage_indicator.py
-X-GNOME-Autostart-enabled=true
-Terminal=false
-```
-
-Replace `YOUR_USER` with your username.
+`./install.sh` sets this up for you — it writes
+`~/.config/autostart/claude-usage-indicator.desktop` pointing at the
+repo directory. If you installed manually, copy
+[`claude-usage-indicator.desktop`](./claude-usage-indicator.desktop) to
+`~/.config/autostart/` and replace `@INSTALL_DIR@` with the absolute
+path to your clone.
 
 ---
 
