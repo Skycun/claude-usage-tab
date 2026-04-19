@@ -26,6 +26,14 @@ _TIER_LABELS = {
     "default_claude_free": "Free",
 }
 
+_SUBSCRIPTION_LABELS = {
+    "pro": "Pro",
+    "max": "Max",
+    "free": "Free",
+    "team": "Team",
+    "enterprise": "Enterprise",
+}
+
 
 def _safe_load_json(path: Path) -> dict:
     try:
@@ -49,8 +57,17 @@ def read_account() -> str:
 
     creds = _safe_load_json(CREDS_PATH)
     oauth = creds.get("claudeAiOauth") or {}
-    raw = oauth.get("rateLimitTier") or oauth.get("subscriptionType")
-    tier = _TIER_LABELS.get(raw, raw) if raw else None
+    raw_tier = oauth.get("rateLimitTier")
+    raw_sub = oauth.get("subscriptionType")
+    # Prefer the specific rateLimitTier label (distinguishes Max 5x vs 20x),
+    # but only when it matches a known value — some accounts expose a generic
+    # "default_claude_ai" that carries no plan info; fall back to subscriptionType.
+    tier = (
+        _TIER_LABELS.get(raw_tier)
+        or _SUBSCRIPTION_LABELS.get((raw_sub or "").lower())
+        or raw_tier
+        or raw_sub
+    )
 
     parts = [p for p in (email, tier) if p]
     return "  ·  ".join(parts) if parts else t("unknown_account")
