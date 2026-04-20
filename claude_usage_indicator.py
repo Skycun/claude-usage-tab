@@ -53,10 +53,10 @@ from settings import (  # noqa: E402
 )
 from strings import current_lang, detect_lang, set_lang, setup_locale, t  # noqa: E402
 
-POLL_SECONDS = 60  # fallback when settings unavailable
+POLL_SECONDS = 120  # fallback when settings unavailable
 SETTINGS_URL = "https://claude.ai/settings/usage"
 APP_ID = "claude-usage-indicator"
-# Snapshot the history to disk every Nth tick (5 * 60s = 5 min by default).
+# Snapshot the history to disk every Nth tick (~10 min at the default cadence).
 HISTORY_SNAPSHOT_EVERY = 5
 # Suppress alerts for this long after boot — history needs to build up.
 BOOT_COOLDOWN = timedelta(minutes=5)
@@ -337,13 +337,9 @@ class Indicator:
             pass
 
     def _show_rate_limited(self, wait_secs: int) -> None:
-        """Keep the previous stats on screen, switch icon to gray."""
+        """Keep the previous stats and icon on screen during backoff."""
         if self.last_good is not None:
             self._render(self.last_good, fresh=False)
-        icon = _gray_icon()
-        if icon != self.current_icon:
-            self.ind.set_icon_full(icon, "Claude usage — rate-limited")
-            self.current_icon = icon
         self.item_refresh.set_label(
             t("rate_limited", d=_fmt_secs(wait_secs))
         )
