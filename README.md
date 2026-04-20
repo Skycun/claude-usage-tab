@@ -148,13 +148,24 @@ indicator will pick up the token on the next tick.
 
 ---
 
-## Run in the background
+## Launch
 
-```bash
-setsid /usr/bin/python3 ~/Projects/claude-usage-tab/claude_usage_indicator.py \
-  > /tmp/claude_usage_indicator.log 2>&1 < /dev/null &
-disown
-```
+`./install.sh` starts the indicator for you at the end of the install,
+so after the first run there is nothing else to do.
+
+To launch it later (after a reboot or an explicit stop):
+
+* **From the app grid** — press <kbd>Super</kbd>, type "Claude Usage
+  Tab", press <kbd>Enter</kbd>. An entry is installed into
+  `~/.local/share/applications/` so the indicator behaves like any
+  other app.
+* **From a terminal** — one line:
+
+  ```bash
+  setsid /usr/bin/python3 ~/Projects/claude-usage-tab/claude_usage_indicator.py \
+    > /tmp/claude_usage_indicator.log 2>&1 < /dev/null &
+  disown
+  ```
 
 Stop it:
 

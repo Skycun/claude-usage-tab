@@ -13,6 +13,7 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ICON_DIR="$HOME/.local/share/claude-usage-indicator"
 AUTOSTART_DIR="$HOME/.config/autostart"
+APPS_DIR="$HOME/.local/share/applications"
 DESKTOP_NAME="claude-usage-indicator.desktop"
 
 say()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
@@ -93,33 +94,44 @@ say "Copying icons to $ICON_DIR"
 mkdir -p "$ICON_DIR"
 cp -u "$REPO_DIR/icons/"*.png "$ICON_DIR/"
 
-# --------------------------------------------------------- autostart .desktop
-say "Installing autostart entry at $AUTOSTART_DIR/$DESKTOP_NAME"
-mkdir -p "$AUTOSTART_DIR"
-sed "s|@INSTALL_DIR@|$REPO_DIR|g" \
-    "$REPO_DIR/$DESKTOP_NAME" \
-    > "$AUTOSTART_DIR/$DESKTOP_NAME"
-chmod 644 "$AUTOSTART_DIR/$DESKTOP_NAME"
+# --------------------------------------------------------- .desktop entries
+# Render once, then install into both autostart and the app launcher so the
+# indicator is relaunched at login *and* appears in the GNOME app grid.
+say "Installing .desktop entries"
+mkdir -p "$AUTOSTART_DIR" "$APPS_DIR"
+rendered="$(mktemp)"
+trap 'rm -f "$rendered"' EXIT
+sed "s|@INSTALL_DIR@|$REPO_DIR|g" "$REPO_DIR/$DESKTOP_NAME" > "$rendered"
+install -m 644 "$rendered" "$AUTOSTART_DIR/$DESKTOP_NAME"
+install -m 644 "$rendered" "$APPS_DIR/$DESKTOP_NAME"
+
+# Refresh the desktop database so the app grid picks up the new entry
+# immediately (non-fatal if the tool is missing).
+if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database "$APPS_DIR" >/dev/null 2>&1 || true
+fi
+
+# ---------------------------------------------------------------- launch now
+# Restart any running instance so the freshly installed code takes effect.
+if pgrep -f claude_usage_indicator.py >/dev/null 2>&1; then
+    say "Restarting running daemon"
+    pkill -f claude_usage_indicator.py || true
+    sleep 1
+fi
+
+say "Starting the indicator"
+setsid /usr/bin/python3 "$REPO_DIR/claude_usage_indicator.py" \
+    > /tmp/claude_usage_indicator.log 2>&1 < /dev/null &
+disown
 
 # ---------------------------------------------------------------------- done
 cat <<EOF
 
-$(say "Install complete.")
+$(say "Install complete — the indicator is running.")
 
-Start the daemon now (without logging out first):
+It will also appear in your app grid (Super key → "Claude Usage Tab")
+and relaunch automatically on every login.
 
-    setsid /usr/bin/python3 "$REPO_DIR/claude_usage_indicator.py" \\
-        > /tmp/claude_usage_indicator.log 2>&1 < /dev/null &
-    disown
-
-Tail the logs:
-
-    tail -f /tmp/claude_usage_indicator.log
-
-Stop it:
-
-    pkill -f claude_usage_indicator.py
-
-Autostart is configured — the indicator will relaunch automatically on
-your next login.
+Tail the logs:    tail -f /tmp/claude_usage_indicator.log
+Stop it:          pkill -f claude_usage_indicator.py
 EOF
