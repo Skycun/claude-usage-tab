@@ -95,6 +95,19 @@ extension is not packaged — install it manually from
 <https://extensions.gnome.org/extension/615/appindicator-support/>. The
 script prints a reminder if it is not enabled.
 
+### Upgrade
+
+```bash
+cd ~/Projects/claude-usage-tab
+git pull
+./install.sh
+```
+
+`install.sh` is idempotent: it refreshes the icons and `.desktop`
+entries, then kills the running daemon and relaunches it against the
+new code — no logout required. Your `settings.json` and
+`history.jsonl` are untouched.
+
 ### Uninstall
 
 ```bash
