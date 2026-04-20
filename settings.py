@@ -41,7 +41,7 @@ class AlertDef:
 class Settings:
     schema_version: int = SCHEMA_VERSION
     lang: str = "fr"
-    poll_seconds: int = 60
+    poll_seconds: int = 120
     builtin_thresholds: tuple[int, ...] = (80, 95)
     alerts: tuple[AlertDef, ...] = field(default_factory=tuple)
 
@@ -49,7 +49,7 @@ class Settings:
 DEFAULT_SETTINGS_JSON: dict[str, Any] = {
     "schema_version": SCHEMA_VERSION,
     "lang": "fr",
-    "poll_seconds": 60,
+    "poll_seconds": 120,
     "builtin_thresholds": [80, 95],
     "alerts": [
         {
@@ -158,7 +158,7 @@ def _validate_alert(raw: dict, index: int) -> AlertDef | None:
 
 def _from_raw(raw: dict) -> Settings:
     lang = str(raw.get("lang") or "fr")
-    poll_seconds = _coerce_int(raw.get("poll_seconds"), 60, minimum=10)
+    poll_seconds = _coerce_int(raw.get("poll_seconds"), 120, minimum=10)
 
     thresholds_raw = raw.get("builtin_thresholds") or [80, 95]
     thresholds: list[int] = []
