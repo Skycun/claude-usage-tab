@@ -95,6 +95,16 @@ extension is not packaged — install it manually from
 <https://extensions.gnome.org/extension/615/appindicator-support/>. The
 script prints a reminder if it is not enabled.
 
+### Uninstall
+
+```bash
+./uninstall.sh           # remove the indicator, keep settings/history
+./uninstall.sh --purge   # also wipe ~/.config and ~/.cache data
+```
+
+System packages and the GNOME extension are left in place — remove
+them manually if you're sure nothing else on the machine needs them.
+
 ### Manual install
 
 <details><summary>Ubuntu / Debian</summary>
