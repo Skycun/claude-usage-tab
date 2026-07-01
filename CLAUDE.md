@@ -21,23 +21,37 @@ User-facing overview, install, and troubleshooting: [README.md](./README.md).
 
 ```
 claude_usage_indicator.py    # Indicator class + main() — the UI
+topbar.py                    # top-bar label composition (settings-driven)
+settings_dialog.py           # GTK settings window
 strings.py                   # i18n (FR/EN) — STRINGS dict + t()
 settings.py                  # ~/.config/claude-usage-indicator/settings.json
-api.py                       # OAuth token + /api/oauth/usage fetcher
+api.py                       # OAuth token + /api/oauth/usage fetcher + refresh
+accounts.py                  # multi-account store + capture + switch + refresh
 alerts.py                    # history (~/.cache/.../history.jsonl) + engine
 icons/                       # default, gray, full PNGs (bundled)
 test_claude_usage.sh         # one-shot curl to the OAuth endpoint
 ```
 
-No package, no venv, no build. Five sibling modules importing each other
+No package, no venv, no build. Sibling modules importing each other
 directly — **not** a package (no ``__init__.py``). Dependencies are
-shallow: ``strings`` is a leaf, ``settings`` and ``api`` depend only on
-``strings``, ``alerts`` depends on ``settings``, and the main script
-imports all four.
+shallow: ``strings`` is a leaf; ``settings`` and ``api`` depend only on
+``strings``; ``alerts`` depends on ``settings``; ``accounts`` depends on
+``api`` + ``settings``; ``topbar`` depends on ``settings`` + ``strings``;
+``settings_dialog`` depends on ``settings`` + ``topbar`` + ``strings`` (and
+GTK); the main script imports the rest.
+
+User-visible display options (Codex on/off, top-bar segments/metrics,
+order, prefixes, compact, separators) live in ``settings.py``
+(``Settings`` + ``TopbarSettings``) and are edited via the GTK
+``settings_dialog`` — **not** constants in the script. The dialog writes
+``settings.json`` and the daemon applies it live (``apply_settings_now``).
 
 Runtime files (never committed):
 - ``~/.config/claude-usage-indicator/settings.json`` — user config, auto-created on first run
 - ``~/.cache/claude-usage-indicator/history.jsonl`` — 72 h of ``(ts, metric, util)`` samples
+- ``~/.config/claude-usage-indicator/accounts.json`` — token-free account index (email/plan/label)
+- ``~/.config/claude-usage-indicator/accounts/<id>.json`` — per-account credential blob, ``0600``
+- ``~/.claude.json.cusi-bak`` — backup written before a switch rewrites ``~/.claude.json``
 
 ---
 
@@ -70,6 +84,15 @@ Runtime files (never committed):
 6. **New user-visible strings go through ``strings.py``.** Always add
    both FR and EN keys. Missing EN falls back to FR with a stderr
    warning — fine for debugging, not OK to ship.
+
+7. **The account store holds several OAuth tokens — guard it like #2.**
+   ``accounts/<id>.json`` files are the only place besides ``~/.claude``
+   that hold tokens; write them ``0600`` and never log/echo them. The
+   ``account_switch_enabled`` flag gates the *only* code that **writes**
+   into ``~/.claude`` (``accounts.switch_to``): it replaces just
+   ``claudeAiOauth`` / ``oauthAccount``, backs up ``~/.claude.json``
+   first, writes atomically, and only affects the next ``claude`` launch.
+   Never widen that write surface, and never commit the store or backup.
 
 ---
 
@@ -116,10 +139,11 @@ Icons are looked up in `~/.local/share/claude-usage-indicator/` first
   UX gap (the user will tell you).
 - Don't rewrite the endpoint call to use `anthropic` SDK. The SDK
   doesn't cover OAuth usage; the raw `requests.get` is correct.
-- Don't add a config file or CLI flags until the user asks — constants
-  at the top of the script are fine for now.
+- Don't add CLI flags. User-facing options go through `settings.json`
+  (validated in `settings.py`) and the GTK settings window — not flags.
 - Don't use emojis in the top-bar label. The GNOME top-bar font drops
-  most of them (we already hit this with 🗓). ASCII text only.
+  most of them (we already hit this with 🗓). ASCII text only. This is
+  why `topbar` separators are sanitized to printable ASCII.
 - Don't commit anything from `~/.claude/`. Ever.
 
 ---
