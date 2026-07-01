@@ -43,6 +43,7 @@ gi.require_version("Notify", "0.7")
 from gi.repository import AyatanaAppIndicator3 as AppIndicator  # noqa: E402
 from gi.repository import GLib, Gtk, Notify  # noqa: E402
 
+import accounts  # noqa: E402
 from alerts import History, evaluate_alerts  # noqa: E402
 from api import (  # noqa: E402
     codex_present,
@@ -61,7 +62,7 @@ from settings import (  # noqa: E402
     mtime as settings_mtime,
 )
 from strings import current_lang, detect_lang, set_lang, setup_locale, t  # noqa: E402
-from topbar import compose_label  # noqa: E402
+from topbar import codex_window_label, compose_label  # noqa: E402
 
 POLL_SECONDS = 120  # fallback when settings unavailable
 SETTINGS_URL = "https://claude.ai/settings/usage"
@@ -174,32 +175,6 @@ def _codex_reset_dt(window: dict) -> datetime | None:
     return None
 
 
-def codex_window_label(seconds: int | None) -> str:
-    """Map ``limit_window_seconds`` to a localized short label.
-
-    Buckets to the nearest of {1h, 5h, 1d, 7d, 30d}. Falls back to
-    ``codex_window_other`` (``w?``) if no match is close.
-    """
-    if not seconds or seconds <= 0:
-        return t("codex_window_other")
-    buckets = (
-        (3600, "codex_window_1h"),
-        (5 * 3600, "codex_window_5h"),
-        (86_400, "codex_window_1d"),
-        (7 * 86_400, "codex_window_7d"),
-        (30 * 86_400, "codex_window_30d"),
-    )
-    # Pick the bucket with the smallest relative distance.
-    best_key = "codex_window_other"
-    best_ratio = 0.35  # require <35% relative error to accept a bucket
-    for ref, key in buckets:
-        ratio = abs(seconds - ref) / ref
-        if ratio < best_ratio:
-            best_ratio = ratio
-            best_key = key
-    return t(best_key)
-
-
 def _fmt_secs(secs: int) -> str:
     if secs >= 3600:
         return t("duration_hours_minutes", h=secs // 3600, m=(secs % 3600) // 60)
@@ -304,6 +279,12 @@ class Indicator:
         self.item_sonnet = self._info_item(t("sonnet_placeholder"))
         self.item_extra = self._info_item("")
 
+        # Multi-account submenu — one row per stored Claude account, rebuilt
+        # each tick. Hidden until at least one account is stored.
+        self.item_accounts = Gtk.MenuItem(label=t("accounts_menu"))
+        self.accounts_submenu = Gtk.Menu()
+        self.item_accounts.set_submenu(self.accounts_submenu)
+
         # Codex metric rows — hidden until ~/.codex/auth.json exists.
         self.item_codex_primary = self._info_item(
             t("codex_placeholder", win=t("codex_window_5h"))
@@ -337,6 +318,7 @@ class Indicator:
             self.item_weekly,
             self.item_sonnet,
             self.item_extra,
+            self.item_accounts,
             self.sep_between_providers,
             self.item_account_codex,       # "Codex | email (plan)"
             self.item_codex_login,
@@ -385,6 +367,8 @@ class Indicator:
             item.hide()
         # Extra row hidden by default — only shown when extra credits enabled.
         self.item_extra.hide()
+        # Accounts submenu hidden until we've stored at least one account.
+        self.item_accounts.hide()
 
     @staticmethod
     def _info_item(label: str) -> Gtk.MenuItem:
@@ -613,7 +597,14 @@ class Indicator:
         claude_state = self._tick_claude(now) if self.token else None
         codex_state = self._tick_codex(now) if self.codex_present else None
 
-        self._render(claude_state, codex_state, now=now)
+        # Multi-account: snapshot the active account, then poll the others.
+        account_states: list[dict] = []
+        if self.settings.accounts_enabled:
+            if self.token:
+                accounts.capture(now)
+            account_states = self._tick_accounts(now, claude_state)
+
+        self._render(claude_state, codex_state, account_states, now=now)
 
     def _tick_claude(self, now: datetime) -> dict:
         """Fetch (or replay) Claude usage. Returns a state dict for ``_render``.
@@ -774,6 +765,7 @@ class Indicator:
         self,
         claude_state: dict | None,
         codex_state: dict | None,
+        account_states: list[dict] | None = None,
         now: datetime | None = None,
     ) -> None:
         """Compose label + dropdown from both providers' states."""
@@ -869,6 +861,178 @@ class Indicator:
 
         # --- Refresh-row timestamp / rate-limited countdown ---
         self._update_refresh_label(claude_state, codex_state, any_fresh)
+
+        # --- Multi-account submenu ---
+        self._render_accounts(account_states or [])
+
+    # -- accounts --------------------------------------------------------
+
+    def _tick_accounts(
+        self, now: datetime, claude_state: dict | None
+    ) -> list[dict]:
+        """Poll every stored account. The active one reuses the live Claude
+        state; the rest are fetched (refreshing an expired token first)."""
+        active = accounts.active_id()
+        states: list[dict] = []
+        for acct in accounts.list_accounts():
+            if acct.id == active:
+                states.append(
+                    {
+                        "acct": acct,
+                        "active": True,
+                        "status": (
+                            claude_state.get("status")
+                            if claude_state
+                            else "error"
+                        ),
+                        "data": claude_state.get("data") if claude_state else None,
+                    }
+                )
+            else:
+                states.append(self._poll_stored_account(acct, now))
+        return states
+
+    def _poll_stored_account(self, acct: accounts.Account, now: datetime) -> dict:
+        """Fetch one inactive account's usage, refreshing its token if needed.
+
+        Never refreshes the *active* account (the caller handles that) so we
+        don't race Claude Code's own refresh of the shared refresh token.
+        """
+        blob = accounts.load_blob(acct.id) or {}
+        oauth = blob.get("claudeAiOauth") or {}
+        token = oauth.get("accessToken")
+        if not token:
+            return {"acct": acct, "active": False, "status": "expired", "data": None}
+        if accounts.token_expired(oauth, now):
+            token = accounts.refresh(acct.id)
+            if not token:
+                return {
+                    "acct": acct,
+                    "active": False,
+                    "status": "expired",
+                    "data": None,
+                }
+        data = fetch_usage(token)
+        if data.get("error") == "HTTP 401":
+            # Stored token rejected — one refresh + retry before giving up.
+            token = accounts.refresh(acct.id)
+            if token:
+                data = fetch_usage(token)
+        if data.get("rate_limited"):
+            return {
+                "acct": acct,
+                "active": False,
+                "status": "rate_limited",
+                "data": None,
+            }
+        if "error" in data:
+            status = "expired" if data.get("error") == "HTTP 401" else "error"
+            return {"acct": acct, "active": False, "status": status, "data": None}
+        return {"acct": acct, "active": False, "status": "ok", "data": data}
+
+    def _render_accounts(self, states: list[dict]) -> None:
+        """Rebuild the accounts submenu from the polled states."""
+        if not self.settings.accounts_enabled or not states:
+            self.item_accounts.hide()
+            return
+        for child in self.accounts_submenu.get_children():
+            self.accounts_submenu.remove(child)
+        for st in states:
+            self.accounts_submenu.append(self._build_account_item(st))
+        self.accounts_submenu.show_all()
+        self.item_accounts.show()
+
+    def _account_usage_text(self, st: dict) -> str:
+        status = st.get("status")
+        if status == "ok" and st.get("data"):
+            data = st["data"]
+            five = float((data.get("five_hour") or {}).get("utilization") or 0)
+            seven = float((data.get("seven_day") or {}).get("utilization") or 0)
+            return t("acct_usage", five=five, seven=seven)
+        if status == "rate_limited":
+            return t("acct_usage_rl")
+        if status in ("expired", "login_expired"):
+            return t("acct_usage_expired")
+        return t("acct_usage_error")
+
+    def _build_account_item(self, st: dict) -> Gtk.MenuItem:
+        acct: accounts.Account = st["acct"]
+        active = bool(st.get("active"))
+        mark = t("acct_active_mark") if active else t("acct_inactive_mark")
+        email = acct.email or acct.label
+        plan_suffix = f" ({acct.plan})" if acct.plan else ""
+        item = Gtk.MenuItem(
+            label=f"{mark} {email}{plan_suffix}  —  {self._account_usage_text(st)}"
+        )
+
+        sub = Gtk.Menu()
+        switch_item = Gtk.MenuItem()
+        if active:
+            switch_item.set_label(t("acct_switch_active"))
+            switch_item.set_sensitive(False)
+        elif not self.settings.account_switch_enabled:
+            switch_item.set_label(t("acct_switch_disabled"))
+            switch_item.set_sensitive(False)
+        else:
+            switch_item.set_label(t("acct_switch"))
+            switch_item.connect(
+                "activate",
+                lambda _i, aid=acct.id, em=email: self._on_switch_account(aid, em),
+            )
+        sub.append(switch_item)
+
+        forget_item = Gtk.MenuItem(label=t("acct_forget"))
+        if active:
+            forget_item.set_sensitive(False)
+        else:
+            forget_item.connect(
+                "activate",
+                lambda _i, aid=acct.id, em=email: self._on_forget_account(aid, em),
+            )
+        sub.append(forget_item)
+
+        item.set_submenu(sub)
+        return item
+
+    def _on_switch_account(self, acct_id: str, email: str) -> None:
+        if not self._confirm(
+            t("acct_switch_confirm_title"),
+            t("acct_switch_confirm_body", email=email),
+        ):
+            return
+        if accounts.switch_to(acct_id, datetime.now(timezone.utc)):
+            self.notify(
+                t("acct_switch_ok_title"), t("acct_switch_ok_body", email=email)
+            )
+        else:
+            self.notify(
+                t("acct_switch_fail_title"),
+                t("acct_switch_fail_body"),
+                urgent=True,
+            )
+        GLib.idle_add(self._deferred_tick)
+
+    def _on_forget_account(self, acct_id: str, email: str) -> None:
+        if not self._confirm(
+            t("acct_forget_confirm_title"),
+            t("acct_forget_confirm_body", email=email),
+        ):
+            return
+        accounts.forget(acct_id)
+        GLib.idle_add(self._deferred_tick)
+
+    def _confirm(self, title: str, body: str) -> bool:
+        dlg = Gtk.MessageDialog(
+            transient_for=self._settings_window,
+            modal=True,
+            message_type=Gtk.MessageType.QUESTION,
+            buttons=Gtk.ButtonsType.OK_CANCEL,
+            text=title,
+        )
+        dlg.format_secondary_text(body)
+        resp = dlg.run()
+        dlg.destroy()
+        return resp == Gtk.ResponseType.OK
 
     # -- icon ------------------------------------------------------------
 

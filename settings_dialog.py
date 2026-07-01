@@ -83,6 +83,9 @@ class SettingsDialog(Gtk.Window):
         notebook.append_page(
             self._build_codex_tab(), Gtk.Label(label=t("dlg_tab_codex"))
         )
+        notebook.append_page(
+            self._build_accounts_tab(), Gtk.Label(label=t("dlg_tab_accounts"))
+        )
 
         outer.pack_start(self._build_preview(), False, False, 0)
         outer.pack_start(self._build_buttons(), False, False, 0)
@@ -156,6 +159,10 @@ class SettingsDialog(Gtk.Window):
             t("dlg_alert_prefix"), tb.show_alert_prefix
         )
         box.pack_start(self.chk_alert_prefix, False, False, 0)
+        self.chk_metric_labels = self._check(
+            t("dlg_metric_labels"), tb.metric_labels
+        )
+        box.pack_start(self.chk_metric_labels, False, False, 0)
         self.chk_compact = self._check(t("dlg_compact"), tb.compact)
         box.pack_start(self.chk_compact, False, False, 0)
 
@@ -205,6 +212,28 @@ class SettingsDialog(Gtk.Window):
         )
         box.pack_start(self.chk_codex_enabled, False, False, 0)
         box.pack_start(self._dim(t("dlg_codex_enabled_hint")), False, False, 0)
+        return box
+
+    # ------------------------------------------------------------ tab: accounts
+
+    def _build_accounts_tab(self) -> Gtk.Widget:
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box.set_border_width(12)
+        self.chk_accounts_enabled = self._check(
+            t("dlg_accounts_enabled"), self.settings.accounts_enabled
+        )
+        box.pack_start(self.chk_accounts_enabled, False, False, 0)
+        box.pack_start(
+            self._dim(t("dlg_accounts_enabled_hint")), False, False, 0
+        )
+        box.pack_start(Gtk.Separator(), False, False, 4)
+        self.chk_account_switch = self._check(
+            t("dlg_account_switch_enabled"), self.settings.account_switch_enabled
+        )
+        box.pack_start(self.chk_account_switch, False, False, 0)
+        box.pack_start(
+            self._dim(t("dlg_account_switch_hint")), False, False, 0
+        )
         return box
 
     # --------------------------------------------------------------- preview
@@ -293,6 +322,7 @@ class SettingsDialog(Gtk.Window):
             claude_first=self.cmb_order.get_active_id() != "codex_first",
             show_provider_prefix=self.chk_prefix.get_active(),
             show_alert_prefix=self.chk_alert_prefix.get_active(),
+            metric_labels=self.chk_metric_labels.get_active(),
             compact=self.chk_compact.get_active(),
             # Mirror the loader's sanitization so the preview matches what
             # actually gets saved (non-ASCII is stripped; empty → default).
@@ -325,6 +355,8 @@ class SettingsDialog(Gtk.Window):
             poll_seconds=int(self.spin_poll.get_value()),
             builtin_thresholds=self._collect_thresholds(),
             codex_enabled=self.chk_codex_enabled.get_active(),
+            accounts_enabled=self.chk_accounts_enabled.get_active(),
+            account_switch_enabled=self.chk_account_switch.get_active(),
             topbar=self._collect_topbar(),
         )
 

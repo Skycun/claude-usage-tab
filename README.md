@@ -35,8 +35,13 @@ to check how much budget you have left.
     (see [Settings](#settings)).
   - One-click refresh with last-update timestamp.
 - **Customisable top-bar** — show/hide each provider, pick which metrics
-  appear, reorder, toggle prefixes, compact mode, separators. Set it all
-  from the settings window with a live preview.
+  appear, reorder, toggle prefixes, per-metric labels (`5h 42% · 7j 78%`),
+  compact mode, separators. Set it all from the settings window with a
+  live preview.
+- **Multi-account switcher** — remembers every Claude account you sign in
+  as, shows each one's 5h / 7j usage in a *Claude accounts* submenu, and
+  (opt-in) switches which account Claude Code uses on its next launch.
+  See [Multiple accounts](#multiple-accounts).
 - **Codex master switch** — turn the whole Codex integration off
   (no polling, no UI) from the settings window.
 - **Bilingual UI** — French (default) and English. Switch in the
@@ -253,17 +258,19 @@ endpoint is rate-limited. Open the menu — the refresh line will say
 ## Settings
 
 Pick *Settings…* in the menu to open a small GTK window — the simplest
-way to tweak the display. It has three tabs:
+way to tweak the display. It has four tabs:
 
 - **General** — language, refresh cadence, built-in alert thresholds.
 - **Top-bar** — show/hide the Claude and Codex segments independently,
   choose which metrics each one shows (Claude: 5h / 7d / Sonnet; Codex:
   primary / secondary window), provider order, the `C` / `X` prefixes,
-  the `/!\ ` alert prefix, a **compact** mode (one value per provider),
-  and the separators. A **live preview** at the bottom shows the
-  resulting label as you toggle.
+  the `/!\ ` alert prefix, **per-metric labels** (`5h 42% · 7j 78%`),
+  a **compact** mode (one value per provider), and the separators. A
+  **live preview** at the bottom shows the resulting label as you toggle.
 - **Codex** — a master switch. When off, the daemon makes **no Codex
   network calls** and hides the whole Codex section everywhere.
+- **Accounts** — enable multi-account tracking and, separately, the
+  (invasive) account switch. See [Multiple accounts](#multiple-accounts).
 
 Saving applies immediately — no restart. The window covers everything
 except custom alerts; use *Edit JSON…* (inside the window) for those.
@@ -280,6 +287,8 @@ stderr and the defaults are kept in memory.
   "poll_seconds": 60,        // minimum 10
   "builtin_thresholds": [80, 95],
   "codex_enabled": true,     // master switch: off = no Codex polling/UI
+  "accounts_enabled": true,          // capture + show all Claude accounts
+  "account_switch_enabled": false,   // opt-in: allow switching (writes ~/.claude)
   "topbar": {
     "show_claude": true,             // show the Claude segment in the top-bar
     "show_codex": true,              // show the Codex segment in the top-bar
@@ -288,9 +297,10 @@ stderr and the defaults are kept in memory.
     "claude_first": true,            // provider order
     "show_provider_prefix": true,    // the "C" / "X" letters
     "show_alert_prefix": true,       // the "/!\\" prefix when an alert is active
+    "metric_labels": false,          // prefix each value with 5h / 7j / S7
     "compact": false,                // one value (the worst) per provider
-    "separator": " | ",              // between providers (ASCII only)
-    "metric_separator": " . ",       // between metrics (ASCII only)
+    "separator": " | ",              // between providers (ASCII + · • – —)
+    "metric_separator": " . ",       // between metrics (ASCII + · • – —)
     "percent_decimals": 0            // 0–2
   },
   "alerts": [
@@ -330,6 +340,47 @@ history can build up.
 Env var `CLAUDE_USAGE_LANG=fr|en` overrides the file's `lang` value —
 useful when testing.
 
+## Multiple accounts
+
+Claude Code stores a **single** active account in
+`~/.claude/.credentials.json` + `~/.claude.json`; signing in as another
+account overwrites it. This app can remember every account you use and
+let you flip between them.
+
+**How it works**
+
+- **Capture (automatic).** With `accounts_enabled` on (default), each time
+  you sign in as a different account (`/login`, or `claude` in a fresh
+  terminal), the daemon snapshots it into its own store on the next tick.
+  Nothing to click.
+- **See all usages.** A *Claude accounts* submenu lists every stored
+  account with its 5h / 7j usage. The active one is marked `●`. Inactive
+  accounts are polled too — their access token is refreshed automatically
+  when expired. If a refresh can't go through (some networks block it),
+  the row shows *token expired — switch to refresh* and updates once you
+  switch to it.
+- **Switch (opt-in).** Turn on **Allow switching accounts** in the
+  *Accounts* tab first — it's off by default because it **writes into
+  `~/.claude`**. Then open an account's submenu → *Switch to this
+  account*. After a confirmation, the app replaces the `claudeAiOauth` /
+  `oauthAccount` blocks (backing up `~/.claude.json` to
+  `~/.claude.json.cusi-bak` first) and leaves every other key untouched.
+
+**Important:** switching takes effect on the **next** `claude` launch — a
+session already running won't switch mid-flight, and swapping credentials
+under a live session can disrupt it.
+
+**Where it's stored** (never committed, `chmod 0600`):
+
+- `~/.config/claude-usage-indicator/accounts.json` — token-free index
+  (email, plan, label).
+- `~/.config/claude-usage-indicator/accounts/<id>.json` — the per-account
+  credential blob. These hold OAuth tokens; treat them like
+  `~/.claude/.credentials.json`.
+
+To stop tracking an account, open its submenu → *Forget this account*
+(deletes its stored blob; no effect on `~/.claude`).
+
 ## Project layout
 
 ```
@@ -339,7 +390,8 @@ claude-usage-tab/
 ├── settings_dialog.py          # GTK settings window
 ├── strings.py                  # i18n (FR + EN)
 ├── settings.py                 # settings.json schema + loader
-├── api.py                      # token + /api/oauth/usage fetcher
+├── api.py                      # token + /api/oauth/usage fetcher + refresh
+├── accounts.py                 # multi-account store + switch
 ├── alerts.py                   # usage history + alert engine
 ├── test_claude_usage.sh        # one-shot endpoint tester
 ├── icons/

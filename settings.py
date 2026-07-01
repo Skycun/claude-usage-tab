@@ -72,6 +72,9 @@ class TopbarSettings:
     claude_first: bool = True
     show_provider_prefix: bool = True
     show_alert_prefix: bool = True
+    # Prefix each value with its short window label ("5h 42% . 7j 78%")
+    # instead of bare percentages. Pairs well with show_provider_prefix off.
+    metric_labels: bool = False
     compact: bool = False
     separator: str = " | "
     metric_separator: str = " . "
@@ -85,6 +88,11 @@ class Settings:
     poll_seconds: int = 120
     builtin_thresholds: tuple[int, ...] = (80, 95)
     codex_enabled: bool = True
+    # Multi-account: capture every account you sign in as and show their
+    # usage in the menu. ``account_switch_enabled`` additionally allows the
+    # (invasive) switch that rewrites ~/.claude — off by default.
+    accounts_enabled: bool = True
+    account_switch_enabled: bool = False
     topbar: TopbarSettings = field(default_factory=TopbarSettings)
     alerts: tuple[AlertDef, ...] = field(default_factory=tuple)
 
@@ -95,6 +103,8 @@ DEFAULT_SETTINGS_JSON: dict[str, Any] = {
     "poll_seconds": 120,
     "builtin_thresholds": [80, 95],
     "codex_enabled": True,
+    "accounts_enabled": True,
+    "account_switch_enabled": False,
     "topbar": {
         "show_claude": True,
         "show_codex": True,
@@ -103,6 +113,7 @@ DEFAULT_SETTINGS_JSON: dict[str, Any] = {
         "claude_first": True,
         "show_provider_prefix": True,
         "show_alert_prefix": True,
+        "metric_labels": False,
         "compact": False,
         "separator": " | ",
         "metric_separator": " . ",
@@ -179,19 +190,28 @@ def _coerce_bool(v: Any, default: bool) -> bool:
     return v if isinstance(v, bool) else default
 
 
-def sanitize_separator(v: Any, default: str, *, max_len: int = 8) -> str:
-    """Keep only printable ASCII (incl. space); fall back to the default.
+# A tiny allowlist of non-ASCII separators that render reliably in the GNOME
+# top-bar font. The blanket "ASCII only" rule exists to avoid missing glyphs
+# (we hit this with the calendar emoji 🗓); these Latin-1/General-Punctuation
+# characters are near-universally present, so they're safe to permit.
+_SEPARATOR_EXTRAS = "·•–—"  # · • – —
 
-    The top-bar font drops most non-ASCII glyphs (we hit this with the
-    calendar emoji), so separators are restricted to ``0x20..0x7e``.
-    Public so the settings dialog can mirror it in its live preview.
+
+def sanitize_separator(v: Any, default: str, *, max_len: int = 8) -> str:
+    """Keep printable ASCII + a few safe separator glyphs; else the default.
+
+    The top-bar font drops most non-ASCII glyphs, so separators are limited
+    to ``0x20..0x7e`` plus :data:`_SEPARATOR_EXTRAS` (``· • – —``). Public so
+    the settings dialog can mirror it in its live preview.
     """
     if not isinstance(v, str):
         return default
-    ascii_only = "".join(ch for ch in v if 0x20 <= ord(ch) <= 0x7E)
-    if not ascii_only:
+    kept = "".join(
+        ch for ch in v if 0x20 <= ord(ch) <= 0x7E or ch in _SEPARATOR_EXTRAS
+    )
+    if not kept:
         return default
-    return ascii_only[:max_len]
+    return kept[:max_len]
 
 
 def _coerce_metrics(
@@ -237,6 +257,7 @@ def _validate_topbar(raw: Any) -> TopbarSettings:
         claude_first=_coerce_bool(raw.get("claude_first"), True),
         show_provider_prefix=_coerce_bool(raw.get("show_provider_prefix"), True),
         show_alert_prefix=_coerce_bool(raw.get("show_alert_prefix"), True),
+        metric_labels=_coerce_bool(raw.get("metric_labels"), False),
         compact=_coerce_bool(raw.get("compact"), False),
         separator=sanitize_separator(raw.get("separator"), " | "),
         metric_separator=sanitize_separator(raw.get("metric_separator"), " . "),
@@ -319,6 +340,10 @@ def _from_raw(raw: dict) -> Settings:
         poll_seconds=poll_seconds,
         builtin_thresholds=tuple(thresholds),
         codex_enabled=_coerce_bool(raw.get("codex_enabled"), True),
+        accounts_enabled=_coerce_bool(raw.get("accounts_enabled"), True),
+        account_switch_enabled=_coerce_bool(
+            raw.get("account_switch_enabled"), False
+        ),
         topbar=_validate_topbar(raw.get("topbar")),
         alerts=tuple(alerts),
     )
@@ -348,6 +373,7 @@ def topbar_to_dict(tb: TopbarSettings) -> dict[str, Any]:
         "claude_first": tb.claude_first,
         "show_provider_prefix": tb.show_provider_prefix,
         "show_alert_prefix": tb.show_alert_prefix,
+        "metric_labels": tb.metric_labels,
         "compact": tb.compact,
         "separator": tb.separator,
         "metric_separator": tb.metric_separator,
@@ -363,6 +389,8 @@ def settings_to_dict(s: Settings) -> dict[str, Any]:
         "poll_seconds": s.poll_seconds,
         "builtin_thresholds": list(s.builtin_thresholds),
         "codex_enabled": s.codex_enabled,
+        "accounts_enabled": s.accounts_enabled,
+        "account_switch_enabled": s.account_switch_enabled,
         "topbar": topbar_to_dict(s.topbar),
         "alerts": [alert_to_dict(a) for a in s.alerts],
     }

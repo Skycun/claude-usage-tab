@@ -25,7 +25,8 @@ topbar.py                    # top-bar label composition (settings-driven)
 settings_dialog.py           # GTK settings window
 strings.py                   # i18n (FR/EN) — STRINGS dict + t()
 settings.py                  # ~/.config/claude-usage-indicator/settings.json
-api.py                       # OAuth token + /api/oauth/usage fetcher
+api.py                       # OAuth token + /api/oauth/usage fetcher + refresh
+accounts.py                  # multi-account store + capture + switch + refresh
 alerts.py                    # history (~/.cache/.../history.jsonl) + engine
 icons/                       # default, gray, full PNGs (bundled)
 test_claude_usage.sh         # one-shot curl to the OAuth endpoint
@@ -34,9 +35,10 @@ test_claude_usage.sh         # one-shot curl to the OAuth endpoint
 No package, no venv, no build. Sibling modules importing each other
 directly — **not** a package (no ``__init__.py``). Dependencies are
 shallow: ``strings`` is a leaf; ``settings`` and ``api`` depend only on
-``strings``; ``alerts`` depends on ``settings``; ``topbar`` depends on
-``settings`` + ``strings``; ``settings_dialog`` depends on ``settings`` +
-``topbar`` + ``strings`` (and GTK); the main script imports the rest.
+``strings``; ``alerts`` depends on ``settings``; ``accounts`` depends on
+``api`` + ``settings``; ``topbar`` depends on ``settings`` + ``strings``;
+``settings_dialog`` depends on ``settings`` + ``topbar`` + ``strings`` (and
+GTK); the main script imports the rest.
 
 User-visible display options (Codex on/off, top-bar segments/metrics,
 order, prefixes, compact, separators) live in ``settings.py``
@@ -47,6 +49,9 @@ order, prefixes, compact, separators) live in ``settings.py``
 Runtime files (never committed):
 - ``~/.config/claude-usage-indicator/settings.json`` — user config, auto-created on first run
 - ``~/.cache/claude-usage-indicator/history.jsonl`` — 72 h of ``(ts, metric, util)`` samples
+- ``~/.config/claude-usage-indicator/accounts.json`` — token-free account index (email/plan/label)
+- ``~/.config/claude-usage-indicator/accounts/<id>.json`` — per-account credential blob, ``0600``
+- ``~/.claude.json.cusi-bak`` — backup written before a switch rewrites ``~/.claude.json``
 
 ---
 
@@ -79,6 +84,15 @@ Runtime files (never committed):
 6. **New user-visible strings go through ``strings.py``.** Always add
    both FR and EN keys. Missing EN falls back to FR with a stderr
    warning — fine for debugging, not OK to ship.
+
+7. **The account store holds several OAuth tokens — guard it like #2.**
+   ``accounts/<id>.json`` files are the only place besides ``~/.claude``
+   that hold tokens; write them ``0600`` and never log/echo them. The
+   ``account_switch_enabled`` flag gates the *only* code that **writes**
+   into ``~/.claude`` (``accounts.switch_to``): it replaces just
+   ``claudeAiOauth`` / ``oauthAccount``, backs up ``~/.claude.json``
+   first, writes atomically, and only affects the next ``claude`` launch.
+   Never widen that write surface, and never commit the store or backup.
 
 ---
 
