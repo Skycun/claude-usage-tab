@@ -31,10 +31,16 @@ to check how much budget you have left.
   - Sonnet-specific sub-limit when present.
   - Extra-usage credits when enabled.
   - Active alerts block + *Clear alerts* button when any are firing.
-  - *Edit settings* item — opens `settings.json` in the default editor.
+  - *Settings…* item — opens a GTK window to customise the display
+    (see [Settings](#settings)).
   - One-click refresh with last-update timestamp.
-- **Bilingual UI** — French (default) and English. Switch with
-  `CLAUDE_USAGE_LANG=en` or by editing `settings.json`.
+- **Customisable top-bar** — show/hide each provider, pick which metrics
+  appear, reorder, toggle prefixes, compact mode, separators. Set it all
+  from the settings window with a live preview.
+- **Codex master switch** — turn the whole Codex integration off
+  (no polling, no UI) from the settings window.
+- **Bilingual UI** — French (default) and English. Switch in the
+  settings window, via `CLAUDE_USAGE_LANG=en`, or by editing `settings.json`.
 - **Custom rate alerts** — e.g. "warn me when my weekly usage grows by
   more than 20 pp over a 12 h sliding window". Defined in
   `settings.json` (see [Settings](#settings)).
@@ -246,22 +252,53 @@ endpoint is rate-limited. Open the menu — the refresh line will say
 
 ## Settings
 
-The daemon writes `~/.config/claude-usage-indicator/settings.json` on
-first run. Edit it to tweak behaviour — changes are picked up on the
-next tick (no restart required). Invalid JSON or invalid fields are
-logged to stderr and the defaults are kept in memory.
+Pick *Settings…* in the menu to open a small GTK window — the simplest
+way to tweak the display. It has three tabs:
+
+- **General** — language, refresh cadence, built-in alert thresholds.
+- **Top-bar** — show/hide the Claude and Codex segments independently,
+  choose which metrics each one shows (Claude: 5h / 7d / Sonnet; Codex:
+  primary / secondary window), provider order, the `C` / `X` prefixes,
+  the `/!\ ` alert prefix, a **compact** mode (one value per provider),
+  and the separators. A **live preview** at the bottom shows the
+  resulting label as you toggle.
+- **Codex** — a master switch. When off, the daemon makes **no Codex
+  network calls** and hides the whole Codex section everywhere.
+
+Saving applies immediately — no restart. The window covers everything
+except custom alerts; use *Edit JSON…* (inside the window) for those.
+
+Everything lives in `~/.config/claude-usage-indicator/settings.json`,
+written on first run. You can still edit it by hand — changes are
+picked up on the next tick. Invalid JSON or invalid fields are logged to
+stderr and the defaults are kept in memory.
 
 ```jsonc
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "lang": "fr",              // "fr" or "en"
   "poll_seconds": 60,        // minimum 10
   "builtin_thresholds": [80, 95],
+  "codex_enabled": true,     // master switch: off = no Codex polling/UI
+  "topbar": {
+    "show_claude": true,             // show the Claude segment in the top-bar
+    "show_codex": true,              // show the Codex segment in the top-bar
+    "claude_metrics": ["five_hour", "seven_day"],   // + "seven_day_sonnet"
+    "codex_metrics": ["codex_primary", "codex_secondary"],
+    "claude_first": true,            // provider order
+    "show_provider_prefix": true,    // the "C" / "X" letters
+    "show_alert_prefix": true,       // the "/!\\" prefix when an alert is active
+    "compact": false,                // one value (the worst) per provider
+    "separator": " | ",              // between providers (ASCII only)
+    "metric_separator": " . ",       // between metrics (ASCII only)
+    "percent_decimals": 0            // 0–2
+  },
   "alerts": [
     {
       "id": "daily-burn",
       "enabled": false,
       "metric": "seven_day",       // five_hour | seven_day | seven_day_sonnet
+                                   //   | codex_primary | codex_secondary
       "delta_pp": 20,              // trigger when delta > 20 percentage points
       "window_hours": 12,          // sliding window size
       "cooldown_hours": 6,         // silence window after firing
@@ -270,6 +307,9 @@ logged to stderr and the defaults are kept in memory.
   ]
 }
 ```
+
+> An existing `schema_version: 1` file keeps working — the new keys
+> default gracefully until you save from the settings window.
 
 ### Custom rate alerts
 
@@ -295,6 +335,8 @@ useful when testing.
 ```
 claude-usage-tab/
 ├── claude_usage_indicator.py   # Indicator class + main()
+├── topbar.py                   # top-bar label composition (settings-driven)
+├── settings_dialog.py          # GTK settings window
 ├── strings.py                  # i18n (FR + EN)
 ├── settings.py                 # settings.json schema + loader
 ├── api.py                      # token + /api/oauth/usage fetcher

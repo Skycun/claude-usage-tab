@@ -22,8 +22,25 @@ APP_ID = "claude-usage-indicator"
 SETTINGS_DIR = Path.home() / ".config" / APP_ID
 SETTINGS_PATH = SETTINGS_DIR / "settings.json"
 
-VALID_METRICS = ("five_hour", "seven_day", "seven_day_sonnet")
-SCHEMA_VERSION = 1
+VALID_METRICS = (
+    "five_hour",
+    "seven_day",
+    "seven_day_sonnet",
+    "codex_primary",
+    "codex_secondary",
+)
+
+# Metrics that can appear in the top-bar label, per provider. A subset is
+# user-selectable in the settings dialog; the dropdown menu always shows
+# the full detail regardless of these.
+VALID_CLAUDE_TOPBAR_METRICS = ("five_hour", "seven_day", "seven_day_sonnet")
+VALID_CODEX_TOPBAR_METRICS = ("codex_primary", "codex_secondary")
+DEFAULT_CLAUDE_TOPBAR_METRICS = ("five_hour", "seven_day")
+DEFAULT_CODEX_TOPBAR_METRICS = ("codex_primary", "codex_secondary")
+
+# v2 introduced ``codex_enabled`` and the ``topbar`` block. v1 files load
+# fine — the new keys default gracefully via ``.get(...)``.
+SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -38,11 +55,37 @@ class AlertDef:
 
 
 @dataclass(frozen=True)
+class TopbarSettings:
+    """How the GNOME top-bar label is composed.
+
+    ``show_*`` gate whole provider segments; ``*_metrics`` pick which values
+    appear inside a segment. An empty metric tuple hides that provider's
+    segment even when ``show_*`` is True (a deliberate, honoured state — not
+    coerced back to the default). Separators are kept ASCII-safe because the
+    top-bar font drops most non-ASCII glyphs.
+    """
+
+    show_claude: bool = True
+    show_codex: bool = True
+    claude_metrics: tuple[str, ...] = DEFAULT_CLAUDE_TOPBAR_METRICS
+    codex_metrics: tuple[str, ...] = DEFAULT_CODEX_TOPBAR_METRICS
+    claude_first: bool = True
+    show_provider_prefix: bool = True
+    show_alert_prefix: bool = True
+    compact: bool = False
+    separator: str = " | "
+    metric_separator: str = " . "
+    percent_decimals: int = 0
+
+
+@dataclass(frozen=True)
 class Settings:
     schema_version: int = SCHEMA_VERSION
     lang: str = "fr"
     poll_seconds: int = 120
     builtin_thresholds: tuple[int, ...] = (80, 95)
+    codex_enabled: bool = True
+    topbar: TopbarSettings = field(default_factory=TopbarSettings)
     alerts: tuple[AlertDef, ...] = field(default_factory=tuple)
 
 
@@ -51,6 +94,20 @@ DEFAULT_SETTINGS_JSON: dict[str, Any] = {
     "lang": "fr",
     "poll_seconds": 120,
     "builtin_thresholds": [80, 95],
+    "codex_enabled": True,
+    "topbar": {
+        "show_claude": True,
+        "show_codex": True,
+        "claude_metrics": list(DEFAULT_CLAUDE_TOPBAR_METRICS),
+        "codex_metrics": list(DEFAULT_CODEX_TOPBAR_METRICS),
+        "claude_first": True,
+        "show_provider_prefix": True,
+        "show_alert_prefix": True,
+        "compact": False,
+        "separator": " | ",
+        "metric_separator": " . ",
+        "percent_decimals": 0,
+    },
     "alerts": [
         {
             "id": "daily-burn",
@@ -116,6 +173,75 @@ def _coerce_float(v: Any, default: float, *, minimum: float | None = None) -> fl
     if minimum is not None and out < minimum:
         return default
     return out
+
+
+def _coerce_bool(v: Any, default: bool) -> bool:
+    return v if isinstance(v, bool) else default
+
+
+def sanitize_separator(v: Any, default: str, *, max_len: int = 8) -> str:
+    """Keep only printable ASCII (incl. space); fall back to the default.
+
+    The top-bar font drops most non-ASCII glyphs (we hit this with the
+    calendar emoji), so separators are restricted to ``0x20..0x7e``.
+    Public so the settings dialog can mirror it in its live preview.
+    """
+    if not isinstance(v, str):
+        return default
+    ascii_only = "".join(ch for ch in v if 0x20 <= ord(ch) <= 0x7E)
+    if not ascii_only:
+        return default
+    return ascii_only[:max_len]
+
+
+def _coerce_metrics(
+    v: Any, valid: tuple[str, ...], default: tuple[str, ...]
+) -> tuple[str, ...]:
+    """Filter a metric list to valid ids, preserving order and de-duping.
+
+    A missing key (``None``) yields the default. An explicit empty/invalid
+    list yields an empty tuple — the user chose to show nothing there.
+    """
+    if v is None:
+        return default
+    if not isinstance(v, list):
+        return default
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in v:
+        if item in valid and item not in seen:
+            seen.add(item)
+            out.append(item)
+    return tuple(out)
+
+
+def _validate_topbar(raw: Any) -> TopbarSettings:
+    if not isinstance(raw, dict):
+        return TopbarSettings()
+    decimals = _coerce_int(raw.get("percent_decimals"), 0, minimum=0)
+    if decimals > 2:
+        decimals = 2
+    return TopbarSettings(
+        show_claude=_coerce_bool(raw.get("show_claude"), True),
+        show_codex=_coerce_bool(raw.get("show_codex"), True),
+        claude_metrics=_coerce_metrics(
+            raw.get("claude_metrics"),
+            VALID_CLAUDE_TOPBAR_METRICS,
+            DEFAULT_CLAUDE_TOPBAR_METRICS,
+        ),
+        codex_metrics=_coerce_metrics(
+            raw.get("codex_metrics"),
+            VALID_CODEX_TOPBAR_METRICS,
+            DEFAULT_CODEX_TOPBAR_METRICS,
+        ),
+        claude_first=_coerce_bool(raw.get("claude_first"), True),
+        show_provider_prefix=_coerce_bool(raw.get("show_provider_prefix"), True),
+        show_alert_prefix=_coerce_bool(raw.get("show_alert_prefix"), True),
+        compact=_coerce_bool(raw.get("compact"), False),
+        separator=sanitize_separator(raw.get("separator"), " | "),
+        metric_separator=sanitize_separator(raw.get("metric_separator"), " . "),
+        percent_decimals=decimals,
+    )
 
 
 def _validate_alert(raw: dict, index: int) -> AlertDef | None:
@@ -192,5 +318,61 @@ def _from_raw(raw: dict) -> Settings:
         lang=lang,
         poll_seconds=poll_seconds,
         builtin_thresholds=tuple(thresholds),
+        codex_enabled=_coerce_bool(raw.get("codex_enabled"), True),
+        topbar=_validate_topbar(raw.get("topbar")),
         alerts=tuple(alerts),
     )
+
+
+# --------------------------------------------------------------- serialization
+
+
+def alert_to_dict(a: AlertDef) -> dict[str, Any]:
+    return {
+        "id": a.id,
+        "enabled": a.enabled,
+        "metric": a.metric,
+        "delta_pp": a.delta_pp,
+        "window_hours": a.window_hours,
+        "cooldown_hours": a.cooldown_hours,
+        "label": a.label,
+    }
+
+
+def topbar_to_dict(tb: TopbarSettings) -> dict[str, Any]:
+    return {
+        "show_claude": tb.show_claude,
+        "show_codex": tb.show_codex,
+        "claude_metrics": list(tb.claude_metrics),
+        "codex_metrics": list(tb.codex_metrics),
+        "claude_first": tb.claude_first,
+        "show_provider_prefix": tb.show_provider_prefix,
+        "show_alert_prefix": tb.show_alert_prefix,
+        "compact": tb.compact,
+        "separator": tb.separator,
+        "metric_separator": tb.metric_separator,
+        "percent_decimals": tb.percent_decimals,
+    }
+
+
+def settings_to_dict(s: Settings) -> dict[str, Any]:
+    """Serialize a :class:`Settings` back to the on-disk JSON shape."""
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "lang": s.lang,
+        "poll_seconds": s.poll_seconds,
+        "builtin_thresholds": list(s.builtin_thresholds),
+        "codex_enabled": s.codex_enabled,
+        "topbar": topbar_to_dict(s.topbar),
+        "alerts": [alert_to_dict(a) for a in s.alerts],
+    }
+
+
+def save_settings(s: Settings) -> None:
+    """Atomically-ish write settings to disk. Raises ``OSError`` on failure.
+
+    Callers (the settings dialog) catch the error and surface it to the
+    user — we never swallow it silently here.
+    """
+    SETTINGS_DIR.mkdir(parents=True, exist_ok=True)
+    SETTINGS_PATH.write_text(json.dumps(settings_to_dict(s), indent=2) + "\n")
