@@ -1,437 +1,316 @@
-# claude-usage-tab
+# Claude Usage Tab
 
-> GNOME AppIndicator (Ubuntu + Fedora) for **Claude Code** usage — your
-> 5-hour session and 7-day weekly consumption, always visible in the top
-> bar.
+**See your Claude Code usage in the GNOME top bar — your 5-hour session and 7-day weekly limits, always one glance away.**
 
-Same data as `claude /usage`, but glanceable. No need to open a terminal
-to check how much budget you have left.
+![version](https://img.shields.io/badge/version-1.0.0-blue)
+![platform](https://img.shields.io/badge/platform-Linux%20·%20GNOME-informational)
+![python](https://img.shields.io/badge/python-system%203-blue)
+![license](https://img.shields.io/badge/license-MIT-green)
+
+Same numbers as `claude /usage`, but you never have to open a terminal to
+check how much budget you have left. A tiny always-on indicator sits in
+your top bar, turns colour as you approach your limits, and can ping you
+before you run out.
+
+```
+ C 17% . 5%        ← 5-hour session at 17%, weekly at 5%, right in your top bar
+```
 
 > [!NOTE]
-> **Unofficial** — not affiliated with or endorsed by Anthropic. Uses the
-> undocumented OAuth endpoint `/api/oauth/usage` that Claude Code's
-> `/usage` command calls internally. May break if Anthropic changes the
-> endpoint.
+> **Unofficial project — not affiliated with or endorsed by Anthropic.**
+> It reads the same undocumented `/api/oauth/usage` endpoint that Claude
+> Code's own `/usage` command calls. If Anthropic changes it, the
+> indicator degrades gracefully (it won't crash) and may need an update.
+
+<!-- TODO: add a screenshot of the top-bar label + open dropdown here, e.g. docs/screenshot.png -->
+
+---
+
+## Requirements
+
+- **Linux with GNOME** (tested on Ubuntu and Fedora; anything GNOME-based
+  should work).
+- The **AppIndicator / KStatusNotifierItem** GNOME extension enabled
+  (Ubuntu ships it; on Fedora you install it once — see below).
+- **Claude Code** installed and logged in (`claude` at least once, so
+  `~/.claude/.credentials.json` exists).
+
+No virtualenv, no `pip install`, no build step — it runs on your system
+Python and the GTK libraries your distro already ships.
+
+---
+
+## Quick start
+
+```bash
+git clone https://github.com/Skycun/claude-usage-tab.git ~/claude-usage-tab
+cd ~/claude-usage-tab
+./install.sh
+```
+
+That's it — the indicator appears in your top bar and starts polling. The
+installer detects Ubuntu (`apt`) or Fedora (`dnf`), installs the handful
+of system packages it needs, copies the icons, adds an app-grid entry,
+and asks whether you want it to **start automatically at login**. It's
+safe to re-run any time.
+
+> **Not logged in to Claude Code yet?** Run `claude` once — it opens the
+> OAuth login in your browser. The indicator picks up the token on its
+> next tick, no restart needed.
+
+On **Fedora**, the AppIndicator extension isn't in the repos — the
+installer prints a reminder with this one-time link:
+<https://extensions.gnome.org/extension/615/appindicator-support/>
+
+<details>
+<summary><b>Prefer to install the dependencies by hand?</b></summary>
+
+**Ubuntu / Debian**
+```bash
+sudo apt install gir1.2-ayatanaappindicator3-0.1 python3-gi python3-requests libnotify-bin
+gnome-extensions enable ubuntu-appindicators@ubuntu.com
+```
+
+**Fedora / RHEL**
+```bash
+sudo dnf install libayatana-appindicator-gtk3 python3-gobject python3-requests libnotify
+# then enable: https://extensions.gnome.org/extension/615/appindicator-support/
+```
+
+Then run it directly:
+```bash
+/usr/bin/python3 ~/claude-usage-tab/claude_usage_indicator.py
+```
+The `/usr/bin/python3` path is deliberate: PyGObject comes from your
+distro's `python3-gi` / `python3-gobject` package and usually isn't
+present inside virtualenvs.
+</details>
 
 ---
 
 ## Features
 
-- **Top-bar label** — `5h 17%  ·  7j 5%`, updated every 60s. Prefixed
-  with `/!\ ` when a custom alert is active.
-- **Dynamic icon** — three states at a glance:
-  - ⬛ *Default* — normal usage.
-  - ⬜ *Gray* — no active session (5h window at 0%) **or** endpoint
-    rate-limited (stale cache).
-  - 🟪 *Full pink* — session or weekly limit reached (≥ 100%).
-- **Rich dropdown menu**
-  - Logged-in email and plan tier (click → opens
-    `claude.ai/settings/usage`).
-  - Session 5h + weekly 7j with progress bars and reset countdowns.
-  - Sonnet-specific sub-limit when present.
-  - Extra-usage credits when enabled.
-  - Active alerts block + *Clear alerts* button when any are firing.
-  - *Settings…* item — opens a GTK window to customise the display
-    (see [Settings](#settings)).
-  - One-click refresh with last-update timestamp.
-- **Customisable top-bar** — show/hide the label, pick which metrics
-  appear, toggle prefixes, per-metric labels (`5h 42% · 7j 78%`),
-  compact mode, metric separator. Set it all from the settings window
-  with a live preview.
-- **Multi-account switcher** — remembers every Claude account you sign in
-  as, shows each one's 5h / 7j usage in a *Claude accounts* submenu, and
-  (opt-in) switches which account Claude Code uses on its next launch.
-  See [Multiple accounts](#multiple-accounts).
-- **Bilingual UI** — French (default) and English. Switch in the
-  settings window, via `CLAUDE_USAGE_LANG=en`, or by editing `settings.json`.
-- **Built-in updates** — checks GitHub for a newer release, notifies you,
-  and updates in one click (`git pull` + reinstall). Uninstall from the
-  settings window too. See [Updates](#updates).
-- **Custom rate alerts** — e.g. "warn me when my weekly usage grows by
-  more than 20 pp over a 12 h sliding window". Defined in
-  `settings.json` (see [Settings](#settings)).
-- **Desktop notifications**
-  - When the 5h or weekly window resets.
-  - When utilization crosses 80% and 95% (configurable).
-  - When a custom rate alert fires.
-- **Graceful degradation**
-  - If the token is missing or expired: switches to a *"not connected"*
-    layout with a *Connect* button that launches `claude` in a terminal.
-  - If the endpoint returns `rate_limit_error` (a known Anthropic-side
-    bug — see [claude-code #31021][issue-31021]): keeps the last-known
-    stats on screen, switches to the gray icon, retries with exponential
-    backoff (2min → 5min → 15min → 30min → 1h). Honours `Retry-After`
-    when the server sends it.
+- 🟦 **Top-bar label** — `C 17% . 5%`, refreshed every 60 s, with a
+  `/!\` prefix when a custom alert is firing.
+- 🎨 **Colour-coded icon** — normal, **gray** when there's no active
+  session or the endpoint is rate-limited, **pink** when you hit a limit.
+- 📊 **Rich dropdown** — session + weekly bars with reset countdowns, the
+  Sonnet sub-limit and extra-usage credits when present, your account
+  email + plan, and a one-click refresh.
+- 🎛️ **Customisable display** — choose which metrics show, labels vs bare
+  percentages, compact mode, separators — all from a settings window with
+  a live preview.
+- 👥 **Multi-account switcher** — remembers every Claude account you sign
+  in as, shows each one's usage, and (opt-in) switches which account
+  Claude Code uses next. → [Multiple accounts](#multiple-accounts)
+- 🔔 **Notifications** — when a window resets, when you cross 80 % / 95 %,
+  and on your own custom rate alerts.
+- ⬆️ **Built-in updates** — checks GitHub for a new release and updates in
+  one click. → [Updates](#updates)
+- 🌍 **Bilingual** — English (default) and French.
+- 🛟 **Fails gracefully** — a missing token, an outage, or Anthropic's
+  known `429` bug never crash it; stats stay on screen and it retries with
+  backoff.
 
 ---
 
-## How it works
+## Updates
 
-Polls `https://api.anthropic.com/api/oauth/usage` every 60 seconds with
-the OAuth access token from `~/.claude/.credentials.json` (never logged,
-never sent anywhere else). The endpoint returns:
+The indicator checks GitHub for a newer release shortly after launch and
+every 6 hours (an anonymous request — no token, nothing about you is
+sent; you can turn it off under **Settings ▸ Maintenance**). When a newer
+version exists you get:
 
-```json
-{
-  "five_hour": { "utilization": 17.0, "resets_at": "..." },
-  "seven_day": { "utilization": 5.0,  "resets_at": "..." },
-  "seven_day_sonnet": { ... },
-  "extra_usage": { ... }
-}
-```
+- a one-time desktop notification,
+- an **_Update available (vX.Y.Z)_** row in the menu, and
+- a status line at the bottom of the settings window.
 
-Account email and plan tier are read from `~/.claude.json`
-(`oauthAccount.emailAddress`, `claudeAiOauth.rateLimitTier`).
+Click it (or **Update now** in **Settings ▸ Maintenance**) — it opens a
+terminal, runs `git pull --ff-only` then reinstalls, keeping your
+autostart choice. Your settings and history are untouched. Prefer the
+command line? `./update.sh` does the same thing.
 
-[issue-31021]: https://github.com/anthropics/claude-code/issues/31021
-
----
-
-## Install
-
-### Quick install (Ubuntu + Fedora)
-
-```bash
-git clone git@github.com:Skycun/claude-usage-tab.git ~/Projects/claude-usage-tab
-cd ~/Projects/claude-usage-tab
-./install.sh
-```
-
-The script reads `/etc/os-release`, picks `apt` or `dnf`, installs the
-system packages, copies the icons to `~/.local/share/claude-usage-indicator/`,
-and drops a `.desktop` file in `~/.config/autostart/` so the indicator
-starts on every login. It is safe to re-run.
-
-On Fedora the GNOME **AppIndicator and KStatusNotifierItem Support**
-extension is not packaged — install it manually from
-<https://extensions.gnome.org/extension/615/appindicator-support/>. The
-script prints a reminder if it is not enabled.
-
-### Updates
-
-The indicator checks GitHub for a newer release a few seconds after
-launch and every 6 h afterwards (an unauthenticated request — nothing
-about you is sent; disable it under **Settings ▸ Maintenance**). When a
-newer version exists you get a one-shot notification, a **_Update
-available (vX.Y.Z)_** row in the menu, and a status line at the bottom of
-the settings window. Click it (or *Update now* in **Maintenance**) and it
-runs `update.sh` in a terminal: `git pull --ff-only`, then `install.sh`
-with your autostart choice preserved — no logout required. Your
-`settings.json` and `history.jsonl` are untouched.
-
-You can always do it by hand:
-
-```bash
-cd ~/Projects/claude-usage-tab   # wherever you cloned it
-./update.sh                      # git pull + reinstall
-# or the long form:  git pull && ./install.sh
-```
-
-The current version is shown under **Settings ▸ Maintenance** and in
-the `VERSION` file.
-
-### Uninstall
+## Uninstall
 
 From the app: **Settings ▸ Maintenance ▸ Uninstall the app…** (tick the
 box to also wipe your data). Or from a terminal:
 
 ```bash
-./uninstall.sh           # remove the indicator, keep settings/history
+./uninstall.sh           # remove the app, keep settings & history
 ./uninstall.sh --purge   # also wipe settings, history and stored accounts
 ```
 
-System packages and the GNOME extension are left in place — remove
-them manually if you're sure nothing else on the machine needs them.
-
-### Manual install
-
-<details><summary>Ubuntu / Debian</summary>
-
-```bash
-sudo apt install \
-  gir1.2-ayatanaappindicator3-0.1 \
-  python3-gi \
-  python3-requests \
-  libnotify-bin
-gnome-extensions enable ubuntu-appindicators@ubuntu.com
-```
-
-</details>
-
-<details><summary>Fedora / RHEL</summary>
-
-```bash
-sudo dnf install \
-  libayatana-appindicator-gtk3 \
-  python3-gobject \
-  python3-requests \
-  libnotify
-```
-
-Then enable the AppIndicator extension from
-<https://extensions.gnome.org/extension/615/appindicator-support/>.
-
-</details>
-
-Then clone and run:
-
-```bash
-git clone git@github.com:Skycun/claude-usage-tab.git ~/Projects/claude-usage-tab
-cd ~/Projects/claude-usage-tab
-/usr/bin/python3 claude_usage_indicator.py
-```
-
-> The script uses **system Python** (`/usr/bin/python3`) because
-> PyGObject is provided by the distro package (`python3-gi` on Debian,
-> `python3-gobject` on Fedora) and isn't available in most virtualenvs.
-
-### Log in to Claude Code (if you haven't)
-
-```bash
-claude       # triggers OAuth login in your browser
-```
-
-Once logged in, `~/.claude/.credentials.json` is created and the
-indicator will pick up the token on the next tick.
-
----
-
-## Launch
-
-`./install.sh` starts the indicator for you at the end of the install,
-so after the first run there is nothing else to do.
-
-To launch it later (after a reboot or an explicit stop):
-
-* **From the app grid** — press <kbd>Super</kbd>, type "Claude Usage
-  Tab", press <kbd>Enter</kbd>. An entry is installed into
-  `~/.local/share/applications/` so the indicator behaves like any
-  other app.
-* **From a terminal** — one line:
-
-  ```bash
-  setsid /usr/bin/python3 ~/Projects/claude-usage-tab/claude_usage_indicator.py \
-    > /tmp/claude_usage_indicator.log 2>&1 < /dev/null &
-  disown
-  ```
-
-Stop it:
-
-```bash
-pkill -f claude_usage_indicator.py
-```
-
-Tail the logs:
-
-```bash
-tail -f /tmp/claude_usage_indicator.log
-```
-
----
-
-## Autostart on login
-
-`./install.sh` sets this up for you — it writes
-`~/.config/autostart/claude-usage-indicator.desktop` pointing at the
-repo directory. If you installed manually, copy
-[`claude-usage-indicator.desktop`](./claude-usage-indicator.desktop) to
-`~/.config/autostart/` and replace `@INSTALL_DIR@` with the absolute
-path to your clone.
-
----
-
-## Troubleshooting
-
-### Test the OAuth endpoint directly
-
-```bash
-bash test_claude_usage.sh
-```
-
-| Response | Meaning |
-|---|---|
-| `HTTP 200` + JSON with `five_hour` / `seven_day` | All good. |
-| `HTTP 429` with `rate_limit_error` | Known Anthropic bug (#31021). The indicator handles it — stats stay visible, icon turns gray, retries with backoff. |
-| `HTTP 401` | Token expired. Run `claude` to re-authenticate. |
-| `ERROR: no accessToken found` | Not logged in. Run `claude`. |
-
-### Nothing appears in the top bar
-
-- Check the extension: `gnome-extensions list --enabled | grep -i appindicator`
-- Check the process: `pgrep -a -f claude_usage_indicator.py`
-- Check logs: `tail -n 50 /tmp/claude_usage_indicator.log`
-
-### Icon is always gray
-
-Either your 5-hour window is at 0% (no active session) **or** the
-endpoint is rate-limited. Open the menu — the refresh line will say
-`Rate-limited (retry dans …)` in the second case.
+System packages and the GNOME extension are left in place (other apps may
+use them).
 
 ---
 
 ## Settings
 
-Pick *Settings…* in the menu to open a small GTK window — the simplest
-way to tweak the display. It has three tabs:
+Open **Settings…** from the menu — a small GTK window with four tabs:
 
-- **General** — language, refresh cadence, built-in alert thresholds.
-- **Top-bar** — show/hide the label, choose which metrics appear
-  (5h / 7d / Sonnet), the `C` prefix, the `/!\ ` alert prefix,
-  **per-metric labels** (`5h 42% · 7j 78%`), a **compact** mode (one
-  value only), and the metric separator. A **live preview** at the
-  bottom shows the resulting label as you toggle.
+- **General** — language, refresh interval, alert thresholds.
+- **Top-bar** — which metrics show (5h / 7d / Sonnet), the `C` prefix, the
+  `/!\` alert prefix, per-metric labels, compact mode, the separator, and
+  decimals. A **live preview** updates as you toggle.
 - **Accounts** — enable multi-account tracking and, separately, the
-  (invasive) account switch. See [Multiple accounts](#multiple-accounts).
+  (invasive) account switch.
+- **Maintenance** — version, update check on/off, **Update now**, and
+  **Uninstall**.
 
-Saving applies immediately — no restart. The window covers everything
-except custom alerts; use *Edit JSON…* (inside the window) for those.
-
-Everything lives in `~/.config/claude-usage-indicator/settings.json`,
-written on first run. You can still edit it by hand — changes are
-picked up on the next tick. Invalid JSON or invalid fields are logged to
-stderr and the defaults are kept in memory.
+Changes apply immediately — no restart. Everything is stored in
+`~/.config/claude-usage-indicator/settings.json`, which you can also edit
+by hand (invalid values fall back to defaults instead of crashing):
 
 ```jsonc
 {
   "schema_version": 2,
-  "lang": "fr",              // "fr" or "en"
-  "poll_seconds": 60,        // minimum 10
-  "builtin_thresholds": [80, 95],
-  "accounts_enabled": true,          // capture + show all Claude accounts
-  "account_switch_enabled": false,   // opt-in: allow switching (writes ~/.claude)
+  "lang": "en",                        // "en" or "fr"
+  "poll_seconds": 60,                  // minimum 10
+  "builtin_thresholds": [80, 95],      // notify at these % (0–100)
+  "update_check_enabled": true,        // check GitHub for new releases
+  "accounts_enabled": true,            // remember + show all your accounts
+  "account_switch_enabled": false,     // opt-in: allow switching (writes ~/.claude)
   "topbar": {
-    "show_claude": true,             // show the top-bar label
-    "claude_metrics": ["five_hour", "seven_day"],   // + "seven_day_sonnet"
-    "show_provider_prefix": true,    // the "C" letter
-    "show_alert_prefix": true,       // the "/!\\" prefix when an alert is active
-    "metric_labels": false,          // prefix each value with 5h / 7j / S7
-    "compact": false,                // one value (the worst) only
-    "metric_separator": " . ",       // between metrics (ASCII + · • – —)
-    "percent_decimals": 0            // 0–2
+    "show_claude": true,               // show the label at all
+    "claude_metrics": ["five_hour", "seven_day"],  // + "seven_day_sonnet"
+    "show_provider_prefix": true,      // the leading "C"
+    "show_alert_prefix": true,         // the "/!\\" when an alert is active
+    "metric_labels": false,            // prefix each value with 5h / 7d / S7
+    "compact": false,                  // show only the highest value
+    "metric_separator": " . ",         // between metrics (ASCII + · • – —)
+    "percent_decimals": 0              // 0–2
   },
   "alerts": [
     {
       "id": "daily-burn",
       "enabled": false,
-      "metric": "seven_day",       // five_hour | seven_day | seven_day_sonnet
-      "delta_pp": 20,              // trigger when delta > 20 percentage points
-      "window_hours": 12,          // sliding window size
-      "cooldown_hours": 6,         // silence window after firing
-      "label": "Conso hebdo rapide"
+      "metric": "seven_day",           // five_hour | seven_day | seven_day_sonnet
+      "delta_pp": 20,                  // fire when it grows > 20 percentage points…
+      "window_hours": 12,              // …over this sliding window
+      "cooldown_hours": 6,             // stay quiet this long after firing
+      "label": "Fast weekly burn"
     }
   ]
 }
 ```
 
-> An existing `schema_version: 1` file keeps working — the new keys
-> default gracefully until you save from the settings window.
+`CLAUDE_USAGE_LANG=en|fr` overrides the file's `lang` (handy for testing).
 
 ### Custom rate alerts
 
-Each alert watches one metric over a sliding time window. An alert
-**fires** when utilisation has grown by at least `delta_pp` percentage
-points over the last `window_hours`. When it fires:
+An alert watches one metric over a sliding window and **fires** when
+usage grows by at least `delta_pp` percentage points within
+`window_hours`. When it fires you get a notification, a `/!\` prefix on
+the label, and a **Clear alerts** item in the menu. Alerts re-arm when the
+metric resets or when you clear them. There's a 5-minute quiet period at
+startup while history builds up.
 
-- A desktop notification is sent with the alert's `label`.
-- The top-bar label gets a `/!\ ` prefix.
-- A *Clear alerts* item appears in the menu (you can also wait — the
-  prefix disappears automatically when the metric resets or after
-  `cooldown_hours` if you edit the alert to disable it).
-
-Alerts are re-armed when the metric itself resets (drop > 5 pp) or when
-you hit *Clear alerts*. There's a 5-minute quiet period at startup so
-history can build up.
-
-Env var `CLAUDE_USAGE_LANG=fr|en` overrides the file's `lang` value —
-useful when testing.
+---
 
 ## Multiple accounts
 
-Claude Code stores a **single** active account in
-`~/.claude/.credentials.json` + `~/.claude.json`; signing in as another
-account overwrites it. This app can remember every account you use and
-let you flip between them.
+Claude Code only stores **one** active account at a time — signing in as
+another overwrites it. This app remembers all of them and lets you flip
+between them.
 
-**How it works**
-
-- **Capture (automatic).** With `accounts_enabled` on (default), each time
-  you sign in as a different account (`/login`, or `claude` in a fresh
-  terminal), the daemon snapshots it into its own store on the next tick.
-  Nothing to click.
-- **See all usages.** A *Claude accounts* submenu lists every stored
-  account with its 5h / 7j usage. The active one is marked `●`. Inactive
-  accounts are polled too — their access token is refreshed automatically
-  when expired. If a refresh can't go through (some networks block it),
-  the row shows *token expired — switch to refresh* and updates once you
-  switch to it.
+- **Automatic capture.** With `accounts_enabled` on (default), each time
+  you sign in as a different account the daemon snapshots it on the next
+  tick. Nothing to click.
+- **See every account's usage.** A **Claude accounts** submenu lists them
+  all with their 5h / 7d usage; the active one is marked `●`. Inactive
+  accounts are polled too (their token is refreshed automatically when it
+  expires).
 - **Switch (opt-in).** Turn on **Allow switching accounts** in the
   *Accounts* tab first — it's off by default because it **writes into
-  `~/.claude`**. Then open an account's submenu → *Switch to this
-  account*. After a confirmation, the app replaces the `claudeAiOauth` /
-  `oauthAccount` blocks (backing up `~/.claude.json` to
-  `~/.claude.json.cusi-bak` first) and leaves every other key untouched.
+  `~/.claude`**. Then pick an account → **Switch to this account**. The
+  app swaps only the credential blocks (backing up `~/.claude.json`
+  first) and leaves everything else alone.
 
-**Important:** switching takes effect on the **next** `claude` launch — a
-session already running won't switch mid-flight, and swapping credentials
-under a live session can disrupt it.
+> Switching takes effect on the **next** `claude` launch — a running
+> session won't switch mid-flight.
 
-**Where it's stored** (never committed, `chmod 0600`):
-
-- `~/.config/claude-usage-indicator/accounts.json` — token-free index
-  (email, plan, label).
-- `~/.config/claude-usage-indicator/accounts/<id>.json` — the per-account
-  credential blob. These hold OAuth tokens; treat them like
-  `~/.claude/.credentials.json`.
-
-To stop tracking an account, open its submenu → *Forget this account*
-(deletes its stored blob; no effect on `~/.claude`).
-
-## Project layout
-
-```
-claude-usage-tab/
-├── claude_usage_indicator.py   # Indicator class + main()
-├── topbar.py                   # top-bar label composition (settings-driven)
-├── settings_dialog.py          # GTK settings window
-├── strings.py                  # i18n (FR + EN)
-├── settings.py                 # settings.json schema + loader
-├── api.py                      # token + /api/oauth/usage fetcher + refresh
-├── accounts.py                 # multi-account store + switch
-├── alerts.py                   # usage history + alert engine
-├── test_claude_usage.sh        # one-shot endpoint tester
-├── icons/
-│   ├── claude.png              # default state
-│   ├── gray-claude.png         # no-session / rate-limited state
-│   └── full-claude.png         # limit-hit state
-├── README.md
-└── .gitignore
-```
-
-Icons are resolved in this order:
-
-1. `~/.local/share/claude-usage-indicator/*.png` (user override).
-2. `icons/*.png` (bundled with the repo).
-3. GNOME `dialog-information-symbolic` fallback.
+Stored accounts live in `~/.config/claude-usage-indicator/accounts/`
+(`chmod 0600` — they contain OAuth tokens, so treat them like
+`~/.claude/.credentials.json`). Remove one with **Forget this account**.
 
 ---
 
-## Related issues & requests upstream
+## Troubleshooting
 
-- [claude-code #31021][issue-31021] — `/api/oauth/usage` returns
-  persistent 429s.
-- [claude-code #23975][issue-23975] — expose rate-limit data in
-  statusLine JSON.
-- [claude-code #44328][issue-44328] — proposal for an official
-  `claude usage` CLI / API.
+**Nothing shows in the top bar**
+```bash
+gnome-extensions list --enabled | grep -i appindicator   # extension on?
+pgrep -a -f claude_usage_indicator.py                     # daemon running?
+tail -n 50 /tmp/claude_usage_indicator.log                # any errors?
+```
 
-If Anthropic ships a stable, documented endpoint, this project will
-migrate to it.
+**The icon is always gray** — either your 5-hour window is at 0 % (no
+active session) or the endpoint is rate-limited. Open the menu: the
+refresh line says *Rate-limited (retry in …)* in the second case.
 
+**Check the endpoint directly**
+```bash
+bash test_claude_usage.sh
+```
+| Response | Meaning |
+|---|---|
+| `HTTP 200` + JSON | All good. |
+| `HTTP 429` (`rate_limit_error`) | Known Anthropic bug ([#31021][issue-31021]) — handled: stats stay, icon greys, retries with backoff. |
+| `HTTP 401` | Token expired — run `claude` to re-authenticate. |
+| `no accessToken found` | Not logged in — run `claude`. |
+
+---
+
+## How it works
+
+Every 60 seconds the daemon calls
+`https://api.anthropic.com/api/oauth/usage` with the OAuth token from
+`~/.claude/.credentials.json` (**never logged, never sent anywhere else**)
+and reads back the `five_hour` / `seven_day` / `seven_day_sonnet` /
+`extra_usage` utilisation. Your email and plan come from `~/.claude.json`.
+A `429` is treated as the known Anthropic-side bug, not an error: stats
+stay on screen, the icon greys, and it retries with exponential backoff
+(2 → 5 → 15 → 30 → 60 min), honouring `Retry-After`.
+
+### Project layout
+
+```
+claude_usage_indicator.py   # the indicator (UI + poll loop)
+topbar.py                   # top-bar label composition
+settings_dialog.py          # GTK settings window
+settings.py / strings.py    # config schema + English/French strings
+api.py                      # token read + usage fetch + token refresh
+accounts.py                 # multi-account store + switch
+alerts.py                   # usage history + custom-alert engine
+updates.py / version.py     # GitHub release check + version
+install.sh / update.sh / uninstall.sh
+icons/                      # default · gray · full states
+```
+
+---
+
+## Contributing
+
+Issues and PRs are welcome. There's no build to set up — clone, edit,
+and run `/usr/bin/python3 claude_usage_indicator.py` (see
+[CLAUDE.md](./CLAUDE.md) for the design notes and the few
+non-negotiables). New user-facing text must ship both English and French
+strings.
+
+## Upstream to watch
+
+If Anthropic ships an official usage API/CLI, this project will migrate to
+it and retire the undocumented-endpoint path.
+
+- [claude-code #31021][issue-31021] — persistent `429`s on `/api/oauth/usage`.
+- [claude-code #23975][issue-23975] — expose rate-limit data in the statusLine.
+- [claude-code #44328][issue-44328] — proposal for an official `claude usage`.
+
+[issue-31021]: https://github.com/anthropics/claude-code/issues/31021
 [issue-23975]: https://github.com/anthropics/claude-code/issues/23975
 [issue-44328]: https://github.com/anthropics/claude-code/issues/44328
 
----
-
 ## License
 
-Personal project. Pick a license before making the repo public.
+[MIT](./LICENSE) — do whatever you like, no warranty.
