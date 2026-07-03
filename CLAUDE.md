@@ -28,17 +28,32 @@ settings.py                  # ~/.config/claude-usage-indicator/settings.json
 api.py                       # OAuth token + /api/oauth/usage fetcher + refresh
 accounts.py                  # multi-account store + capture + switch + refresh
 alerts.py                    # history (~/.cache/.../history.jsonl) + engine
+updates.py                   # GitHub releases/latest check (throttled + cached)
+version.py                   # reads the VERSION file (single source of truth)
+VERSION                      # the version string (e.g. 1.0.0)
+install.sh / update.sh / uninstall.sh  # install (autostart prompt/flags),
+                             #   git-pull self-update, uninstall (+ --purge)
 icons/                       # default, gray, full PNGs (bundled)
 test_claude_usage.sh         # one-shot curl to the OAuth endpoint
 ```
 
 No package, no venv, no build. Sibling modules importing each other
 directly — **not** a package (no ``__init__.py``). Dependencies are
-shallow: ``strings``, ``settings`` and ``api`` are leaves (``api`` needs
-only ``requests``); ``alerts`` depends on ``settings``; ``accounts``
-depends on ``api`` + ``settings``; ``topbar`` depends on ``settings`` +
+shallow: ``strings``, ``settings``, ``api`` and ``version`` are leaves
+(``api``/``updates`` need only ``requests``); ``alerts`` depends on
+``settings``; ``accounts`` depends on ``api`` + ``settings``; ``updates``
+depends on ``settings`` + ``version``; ``topbar`` depends on ``settings`` +
 ``strings``; ``settings_dialog`` depends on ``settings`` + ``topbar`` +
 ``strings`` (and GTK); the main script imports the rest.
+
+Update flow: the daemon checks ``github.com/<repo>/releases/latest`` a few
+seconds after launch and every 6 h (``updates.check`` throttles the actual
+network hit and caches to ``~/.cache/.../update_check.json``). A newer tag
+shows a one-shot notification + a *Mise à jour disponible* menu row +
+a footer line in Settings ▸ Maintenance; clicking runs ``update.sh`` in a
+terminal (``git pull --ff-only`` → ``install.sh``, autostart preserved).
+Gated by ``update_check_enabled``. The check must stay **fail-open** — a
+network error degrades to "no update", never a crash or a red warning.
 
 User-visible display options (top-bar metrics, prefixes, compact, metric
 separator) live in ``settings.py`` (``Settings`` + ``TopbarSettings``) and

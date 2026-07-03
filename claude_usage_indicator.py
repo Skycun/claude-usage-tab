@@ -29,6 +29,7 @@ Run:
 
 from __future__ import annotations
 
+import shlex
 import subprocess
 import sys
 import webbrowser
@@ -60,10 +61,18 @@ from settings import (  # noqa: E402
 )
 from strings import current_lang, detect_lang, set_lang, setup_locale, t  # noqa: E402
 from topbar import compose_label  # noqa: E402
+import updates  # noqa: E402
 
 POLL_SECONDS = 120  # fallback when settings unavailable
 SETTINGS_URL = "https://claude.ai/settings/usage"
 APP_ID = "claude-usage-indicator"
+# Where this checkout lives — used to run install/update/uninstall scripts.
+INSTALL_DIR = Path(__file__).resolve().parent
+# First update check runs shortly after launch (let the tray render first),
+# then re-checks on this cadence. The GLib timer and updates.check()'s own
+# cache-staleness threshold share one constant so they can't drift apart.
+UPDATE_CHECK_DELAY = 5
+UPDATE_CHECK_PERIOD = updates.PERIODIC_INTERVAL
 # Snapshot the history to disk every Nth tick (~10 min at the default cadence).
 HISTORY_SNAPSHOT_EVERY = 5
 # Suppress alerts for this long after boot — history needs to build up.
@@ -104,14 +113,18 @@ def _gray_icon() -> str:
     return str(gray) if gray.exists() else FALLBACK_ICON
 
 
-def spawn_claude_login() -> bool:
-    """Open a terminal running ``claude`` to trigger OAuth login."""
+def spawn_terminal(argv: list[str]) -> bool:
+    """Open ``argv`` in whatever terminal emulator is available.
+
+    Detached (``start_new_session``) so it outlives this daemon — important
+    for the update/uninstall paths, which restart or kill us mid-run.
+    """
     candidates = (
-        ["gnome-terminal", "--", "claude"],
-        ["konsole", "-e", "claude"],
-        ["xfce4-terminal", "-e", "claude"],
-        ["x-terminal-emulator", "-e", "claude"],
-        ["xterm", "-e", "claude"],
+        ["gnome-terminal", "--", *argv],
+        ["konsole", "-e", *argv],
+        ["xfce4-terminal", "-x", *argv],
+        ["x-terminal-emulator", "-e", *argv],
+        ["xterm", "-e", *argv],
     )
     for cmd in candidates:
         try:
@@ -120,6 +133,23 @@ def spawn_claude_login() -> bool:
         except FileNotFoundError:
             continue
     return False
+
+
+def spawn_claude_login() -> bool:
+    """Open a terminal running ``claude`` to trigger OAuth login."""
+    return spawn_terminal(["claude"])
+
+
+def _run_script_in_terminal(script: str, *args: str) -> bool:
+    """Run a repo script in a terminal, holding the window open at the end.
+
+    Wrapped in ``bash -lc`` with a trailing ``read`` so the user sees the
+    output (and any error) even when the daemon is about to be killed.
+    """
+    parts = [shlex.quote(str(INSTALL_DIR / script)), *(shlex.quote(a) for a in args)]
+    inner = " ".join(parts)
+    wrapped = f"{inner}; echo; read -rp 'Press Enter to close…' _"
+    return spawn_terminal(["bash", "-lc", wrapped])
 
 
 def format_remaining(reset: datetime | None) -> str:
@@ -179,6 +209,10 @@ class Indicator:
         self.backoff_until: datetime | None = None
         self.current_icon: str | None = None
 
+        # Seed from cache (no network) so a previously-seen release shows
+        # instantly; the live check a few seconds after launch revalidates.
+        self.update_info: updates.UpdateInfo | None = updates.cached()
+
         self.history = History()
         self.history.load_from_disk()
         self.tick_counter: int = 0
@@ -203,6 +237,7 @@ class Indicator:
 
         self._build_menu()
         self._set_connected(self.token is not None)
+        self._apply_update_ui()  # reflect any cached "update available" now
         self.ind.set_menu(self.menu)
         Notify.init(APP_ID)
 
@@ -237,6 +272,10 @@ class Indicator:
         self.item_clear_alerts = Gtk.MenuItem(label=t("clear_alerts"))
         self.item_clear_alerts.connect("activate", self._on_clear_alerts)
 
+        # Update-available row — hidden until a newer release is detected.
+        self.item_update = Gtk.MenuItem(label=t("update_available", ver="?"))
+        self.item_update.connect("activate", self._on_update_clicked)
+
         self.item_refresh = Gtk.MenuItem(label=t("refresh_never"))
         self.item_refresh.connect("activate", self._on_refresh_clicked)
         self.item_edit_settings = Gtk.MenuItem(label=t("edit_settings"))
@@ -259,6 +298,7 @@ class Indicator:
             self.item_active_alerts,
             self.item_clear_alerts,
             sep_actions,
+            self.item_update,
             self.item_refresh,
             self.item_edit_settings,
             quit_item,
@@ -285,6 +325,8 @@ class Indicator:
         self.item_extra.hide()
         # Accounts submenu hidden until we've stored at least one account.
         self.item_accounts.hide()
+        # Update row hidden until a newer release is found.
+        self.item_update.hide()
 
     @staticmethod
     def _info_item(label: str) -> Gtk.MenuItem:
@@ -355,6 +397,9 @@ class Indicator:
             on_save=self._on_settings_saved,
             on_close=self._on_settings_closed,
             on_edit_json=self._open_settings_file,
+            on_update=self._do_update,
+            on_uninstall=self._do_uninstall,
+            update_info=self.update_info,
         )
         self._settings_window = dlg
         dlg.show_all()
@@ -362,9 +407,80 @@ class Indicator:
 
     def _on_settings_saved(self) -> None:
         self.apply_settings_now()
+        # An update-check toggle change may hide/show the menu row.
+        self._apply_update_ui()
 
     def _on_settings_closed(self) -> None:
         self._settings_window = None
+
+    # ------------------------------------------------------------- updates
+
+    def _check_update(self, force: bool) -> None:
+        """Refresh update status (throttled in ``updates.check``), safely."""
+        if not self.settings.update_check_enabled:
+            self.update_info = None
+            self._apply_update_ui()
+            return
+        try:
+            info = updates.check(force=force)
+        except Exception as e:  # noqa: BLE001 — never let a check kill the daemon
+            print(f"update check error: {type(e).__name__}: {e}", file=sys.stderr)
+            return
+        self.update_info = info
+        if info.available and not updates.was_notified(info.latest):
+            updates.mark_notified(info.latest)
+            self.notify(
+                t("update_notif_title"),
+                t("update_notif_body", ver=info.latest),
+            )
+        self._apply_update_ui()
+
+    def _apply_update_ui(self) -> None:
+        """Show/hide + label the update menu row from ``self.update_info``."""
+        info = self.update_info
+        if info and info.available and self.settings.update_check_enabled:
+            self.item_update.set_label(t("update_available", ver=info.latest))
+            self.item_update.show()
+        else:
+            self.item_update.hide()
+
+    def _on_update_clicked(self, _item: Gtk.MenuItem) -> None:
+        self._do_update()
+
+    def _do_update(self) -> None:
+        """Confirm, then run update.sh in a terminal (it restarts the daemon)."""
+        latest = self.update_info.latest if self.update_info else "?"
+        if not self._confirm(
+            t("update_confirm_title"),
+            t("update_confirm_body", ver=latest),
+        ):
+            return
+        if not _run_script_in_terminal("update.sh"):
+            self.notify(
+                t("update_spawn_fail_title"),
+                t("update_spawn_fail_body"),
+                urgent=True,
+            )
+
+    def _do_uninstall(self, purge: bool) -> None:
+        """Run uninstall.sh in a terminal (it stops the daemon)."""
+        args = ["--purge"] if purge else []
+        if not _run_script_in_terminal("uninstall.sh", *args):
+            self.notify(
+                t("update_spawn_fail_title"),
+                t("update_spawn_fail_body"),
+                urgent=True,
+            )
+
+    def update_check_startup(self) -> bool:
+        """One-shot startup check (GLib timeout callback)."""
+        self._check_update(force=True)
+        return False
+
+    def update_check_periodic(self) -> bool:
+        """Recurring update check (GLib timeout callback)."""
+        self._check_update(force=False)
+        return True
 
     def _open_settings_file(self) -> None:
         """Open the raw JSON (for alerts and any field the GUI doesn't cover)."""
@@ -970,6 +1086,12 @@ def main() -> int:
     indicator.tick()
     # Honour the configured poll cadence (re-registrable live on a change).
     indicator.start_poll_timer()
+    # Update checks: one shortly after launch (tray renders first), then on
+    # a slow cadence. The network hit is throttled inside updates.check.
+    GLib.timeout_add_seconds(UPDATE_CHECK_DELAY, indicator.update_check_startup)
+    GLib.timeout_add_seconds(
+        UPDATE_CHECK_PERIOD, indicator.update_check_periodic
+    )
     Gtk.main()
     return 0
 

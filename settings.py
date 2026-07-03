@@ -84,6 +84,8 @@ class Settings:
     # (invasive) switch that rewrites ~/.claude — off by default.
     accounts_enabled: bool = True
     account_switch_enabled: bool = False
+    # Check GitHub for a newer release (unauthenticated GET, nothing sent).
+    update_check_enabled: bool = True
     topbar: TopbarSettings = field(default_factory=TopbarSettings)
     alerts: tuple[AlertDef, ...] = field(default_factory=tuple)
 
@@ -95,6 +97,7 @@ DEFAULT_SETTINGS_JSON: dict[str, Any] = {
     "builtin_thresholds": [80, 95],
     "accounts_enabled": True,
     "account_switch_enabled": False,
+    "update_check_enabled": True,
     "topbar": {
         "show_claude": True,
         "claude_metrics": list(DEFAULT_CLAUDE_TOPBAR_METRICS),
@@ -321,6 +324,7 @@ def _from_raw(raw: dict) -> Settings:
         account_switch_enabled=_coerce_bool(
             raw.get("account_switch_enabled"), False
         ),
+        update_check_enabled=_coerce_bool(raw.get("update_check_enabled"), True),
         topbar=_validate_topbar(raw.get("topbar")),
         alerts=tuple(alerts),
     )
@@ -363,6 +367,7 @@ def settings_to_dict(s: Settings) -> dict[str, Any]:
         "builtin_thresholds": list(s.builtin_thresholds),
         "accounts_enabled": s.accounts_enabled,
         "account_switch_enabled": s.account_switch_enabled,
+        "update_check_enabled": s.update_check_enabled,
         "topbar": topbar_to_dict(s.topbar),
         "alerts": [alert_to_dict(a) for a in s.alerts],
     }

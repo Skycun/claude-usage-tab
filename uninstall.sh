@@ -9,8 +9,11 @@
 #   - deletes the log file at /tmp/claude_usage_indicator.log
 #
 # With --purge, also wipes user data:
-#   - ~/.config/claude-usage-indicator/ (settings.json)
+#   - ~/.config/claude-usage-indicator/ (settings.json, accounts.json,
+#     accounts/<id>.json — the per-account OAuth blobs)
 #   - ~/.cache/claude-usage-indicator/ (history.jsonl)
+#   - ~/.claude.json.cusi-bak (backup of ~/.claude.json left by an account
+#     switch — contains the oauthAccount block)
 #
 # System packages (python3-gi, python3-requests, …) and the GNOME
 # AppIndicator extension are NOT removed — they may be used by other
@@ -31,8 +34,10 @@ Usage: $0 [--purge]
   (default)  Remove the indicator, its autostart entry and its icons,
              but keep your settings and history.
 
-  --purge    Also delete ~/.config/claude-usage-indicator/ (settings.json)
-             and ~/.cache/claude-usage-indicator/ (history.jsonl).
+  --purge    Also delete ~/.config/claude-usage-indicator/ (settings.json
+             + the stored accounts and their OAuth blobs),
+             ~/.cache/claude-usage-indicator/ (history.jsonl), and the
+             ~/.claude.json.cusi-bak backup left by an account switch.
 EOF
             exit 0
             ;;
@@ -48,6 +53,7 @@ AUTOSTART_DIR="$HOME/.config/autostart"
 APPS_DIR="$HOME/.local/share/applications"
 CONFIG_DIR="$HOME/.config/claude-usage-indicator"
 CACHE_DIR="$HOME/.cache/claude-usage-indicator"
+CLAUDE_BACKUP="$HOME/.claude.json.cusi-bak"
 DESKTOP_NAME="claude-usage-indicator.desktop"
 LOG_FILE="/tmp/claude_usage_indicator.log"
 
@@ -99,6 +105,12 @@ if (( PURGE )); then
             rm -rf "$dir"
         fi
     done
+    # The account-switch backup lives outside those dirs and holds a full
+    # copy of ~/.claude.json (the oauthAccount block) — wipe it too.
+    if [[ -f "$CLAUDE_BACKUP" ]]; then
+        say "Purging $CLAUDE_BACKUP"
+        rm -f "$CLAUDE_BACKUP"
+    fi
 fi
 
 printf '\n'

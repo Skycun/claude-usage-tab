@@ -47,12 +47,19 @@ class SettingsDialog(Gtk.Window):
         on_save: Callable[[], None],
         on_close: Callable[[], None],
         on_edit_json: Callable[[], None],
+        on_update: Callable[[], None] | None = None,
+        on_uninstall: Callable[[bool], None] | None = None,
+        update_info: object | None = None,
     ) -> None:
         super().__init__(title=t("dlg_title"))
         self.settings = settings
         self._on_save = on_save
         self._on_close = on_close
         self._on_edit_json = on_edit_json
+        self._on_update = on_update
+        self._on_uninstall = on_uninstall
+        # Duck-typed: an updates.UpdateInfo (current / latest / available).
+        self._update_info = update_info
 
         self.set_border_width(12)
         self.set_default_size(440, -1)
@@ -73,8 +80,13 @@ class SettingsDialog(Gtk.Window):
         notebook.append_page(
             self._build_accounts_tab(), Gtk.Label(label=t("dlg_tab_accounts"))
         )
+        notebook.append_page(
+            self._build_maintenance_tab(),
+            Gtk.Label(label=t("dlg_tab_maintenance")),
+        )
 
         outer.pack_start(self._build_preview(), False, False, 0)
+        outer.pack_start(self._build_footer(), False, False, 0)
         outer.pack_start(self._build_buttons(), False, False, 0)
 
         self._update_preview()
@@ -183,6 +195,111 @@ class SettingsDialog(Gtk.Window):
             self._dim(t("dlg_account_switch_hint")), False, False, 0
         )
         return box
+
+    # ------------------------------------------------------------ tab: maintenance
+
+    def _ui_current(self) -> str:
+        info = self._update_info
+        return getattr(info, "current", None) or "?"
+
+    def _ui_latest(self) -> str:
+        info = self._update_info
+        return getattr(info, "latest", None) or "?"
+
+    def _ui_update_available(self) -> bool:
+        return bool(getattr(self._update_info, "available", False))
+
+    def _build_maintenance_tab(self) -> Gtk.Widget:
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box.set_border_width(12)
+
+        box.pack_start(
+            self._label(t("dlg_version", ver=self._ui_current())), False, False, 0
+        )
+
+        if self._ui_update_available():
+            box.pack_start(
+                self._label(t("dlg_update_available", ver=self._ui_latest())),
+                False,
+                False,
+                0,
+            )
+            btn_update = Gtk.Button(label=t("dlg_update_btn"))
+            btn_update.get_style_context().add_class("suggested-action")
+            btn_update.set_halign(Gtk.Align.START)
+            btn_update.connect("clicked", lambda _b: self._trigger_update())
+            box.pack_start(btn_update, False, False, 0)
+        else:
+            box.pack_start(
+                self._dim(t("dlg_update_uptodate")), False, False, 0
+            )
+
+        self.chk_update_check = self._check(
+            t("dlg_update_check_enabled"), self.settings.update_check_enabled
+        )
+        box.pack_start(self.chk_update_check, False, False, 0)
+        box.pack_start(
+            self._dim(t("dlg_update_check_hint")), False, False, 0
+        )
+
+        box.pack_start(Gtk.Separator(), False, False, 6)
+
+        btn_uninstall = Gtk.Button(label=t("dlg_uninstall_btn"))
+        btn_uninstall.get_style_context().add_class("destructive-action")
+        btn_uninstall.set_halign(Gtk.Align.START)
+        btn_uninstall.connect("clicked", lambda _b: self._on_uninstall_clicked())
+        box.pack_start(btn_uninstall, False, False, 0)
+        return box
+
+    # ----------------------------------------------------------------- footer
+
+    def _build_footer(self) -> Gtk.Widget:
+        """Small always-visible row at the bottom: update status."""
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        if self._ui_update_available():
+            btn = Gtk.Button(
+                label=t("dlg_footer_update", ver=self._ui_latest())
+            )
+            btn.get_style_context().add_class("suggested-action")
+            btn.connect("clicked", lambda _b: self._trigger_update())
+            box.pack_start(btn, False, False, 0)
+        else:
+            box.pack_start(
+                self._dim(t("dlg_footer_uptodate", ver=self._ui_current())),
+                False,
+                False,
+                0,
+            )
+        return box
+
+    def _trigger_update(self) -> None:
+        """Close the window, then hand off to the daemon's update flow."""
+        cb = self._on_update
+        self.destroy()
+        if cb is not None:
+            cb()
+
+    def _on_uninstall_clicked(self) -> None:
+        if self._on_uninstall is None:
+            return
+        dlg = Gtk.MessageDialog(
+            transient_for=self,
+            modal=True,
+            message_type=Gtk.MessageType.WARNING,
+            buttons=Gtk.ButtonsType.OK_CANCEL,
+            text=t("dlg_uninstall_confirm_title"),
+        )
+        dlg.format_secondary_text(t("dlg_uninstall_confirm_body"))
+        purge_chk = Gtk.CheckButton(label=t("dlg_uninstall_purge_check"))
+        dlg.get_content_area().pack_start(purge_chk, False, False, 6)
+        purge_chk.show()
+        resp = dlg.run()
+        purge = purge_chk.get_active()
+        dlg.destroy()
+        if resp == Gtk.ResponseType.OK:
+            cb = self._on_uninstall
+            self.destroy()
+            cb(purge)
 
     # --------------------------------------------------------------- preview
 
@@ -295,6 +412,7 @@ class SettingsDialog(Gtk.Window):
             lang=self.cmb_lang.get_active_id() or "fr",
             poll_seconds=int(self.spin_poll.get_value()),
             builtin_thresholds=self._collect_thresholds(),
+            update_check_enabled=self.chk_update_check.get_active(),
             accounts_enabled=self.chk_accounts_enabled.get_active(),
             account_switch_enabled=self.chk_account_switch.get_active(),
             topbar=self._collect_topbar(),

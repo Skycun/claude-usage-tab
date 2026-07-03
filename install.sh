@@ -20,6 +20,51 @@ say()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m!!\033[0m  %s\n' "$*" >&2; }
 die()  { printf '\033[1;31mxx\033[0m  %s\n' "$*" >&2; exit 1; }
 
+# -------------------------------------------------------------------- options
+# AUTOSTART: "" until resolved, then "1" (launch at login) or "0" (don't).
+# Precedence: --autostart / --no-autostart flag > interactive prompt >
+# default (enabled), so `curl | bash` and CI stay non-interactive.
+AUTOSTART=""
+for arg in "$@"; do
+    case "$arg" in
+        --autostart)    AUTOSTART=1 ;;
+        --no-autostart) AUTOSTART=0 ;;
+        -h|--help)
+            cat <<EOF
+Usage: $0 [--autostart|--no-autostart]
+
+  --autostart     Launch the indicator automatically at every login.
+  --no-autostart  Don't launch at login (still added to the app grid, and
+                  still started once now).
+
+  With neither flag you'll be asked interactively (default: yes). A
+  non-interactive run with no flag defaults to enabling autostart.
+EOF
+            exit 0
+            ;;
+        *) die "unknown flag: $arg (use --help)" ;;
+    esac
+done
+
+# Ask up front (before the sudo/apt output) so all prompts are grouped.
+resolve_autostart() {
+    if [[ -n "$AUTOSTART" ]]; then
+        return  # set by flag
+    fi
+    if [[ -t 0 ]]; then
+        local ans
+        read -r -p "$(printf '\033[1;34m==>\033[0m Start Claude Usage Tab automatically at login? [Y/n] ')" ans
+        case "${ans,,}" in
+            n|no) AUTOSTART=0 ;;
+            *)    AUTOSTART=1 ;;
+        esac
+    else
+        AUTOSTART=1
+        say "No TTY — defaulting to autostart enabled (use --no-autostart to disable)."
+    fi
+}
+resolve_autostart
+
 # ---------------------------------------------------------------- detect distro
 if [[ ! -r /etc/os-release ]]; then
     die "/etc/os-release not found — unsupported system."
@@ -95,15 +140,24 @@ mkdir -p "$ICON_DIR"
 cp -u "$REPO_DIR/icons/"*.png "$ICON_DIR/"
 
 # --------------------------------------------------------- .desktop entries
-# Render once, then install into both autostart and the app launcher so the
-# indicator is relaunched at login *and* appears in the GNOME app grid.
+# Render once. The app-grid launcher is always installed; the autostart
+# entry (relaunch at login) only when the user opted in.
 say "Installing .desktop entries"
-mkdir -p "$AUTOSTART_DIR" "$APPS_DIR"
+mkdir -p "$APPS_DIR"
 rendered="$(mktemp)"
 trap 'rm -f "$rendered"' EXIT
 sed "s|@INSTALL_DIR@|$REPO_DIR|g" "$REPO_DIR/$DESKTOP_NAME" > "$rendered"
-install -m 644 "$rendered" "$AUTOSTART_DIR/$DESKTOP_NAME"
 install -m 644 "$rendered" "$APPS_DIR/$DESKTOP_NAME"
+
+if (( AUTOSTART )); then
+    mkdir -p "$AUTOSTART_DIR"
+    install -m 644 "$rendered" "$AUTOSTART_DIR/$DESKTOP_NAME"
+    say "Autostart enabled — will relaunch at every login."
+else
+    # Honour a "no" on re-run by clearing a previously installed entry.
+    rm -f "$AUTOSTART_DIR/$DESKTOP_NAME"
+    say "Autostart disabled — launch it from the app grid when you want."
+fi
 
 # Refresh the desktop database so the app grid picks up the new entry
 # immediately (non-fatal if the tool is missing).
@@ -125,12 +179,19 @@ setsid /usr/bin/python3 "$REPO_DIR/claude_usage_indicator.py" \
 disown
 
 # ---------------------------------------------------------------------- done
+if (( AUTOSTART )); then
+    login_line='It will relaunch automatically on every login.'
+else
+    login_line='It will NOT start at login — launch it from the app grid, or
+re-run ./install.sh --autostart to enable that.'
+fi
+
 cat <<EOF
 
 $(say "Install complete — the indicator is running.")
 
-It will also appear in your app grid (Super key → "Claude Usage Tab")
-and relaunch automatically on every login.
+It also appears in your app grid (Super key → "Claude Usage Tab").
+$login_line
 
 Tail the logs:    tail -f /tmp/claude_usage_indicator.log
 Stop it:          pkill -f claude_usage_indicator.py

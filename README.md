@@ -44,6 +44,9 @@ to check how much budget you have left.
   See [Multiple accounts](#multiple-accounts).
 - **Bilingual UI** — French (default) and English. Switch in the
   settings window, via `CLAUDE_USAGE_LANG=en`, or by editing `settings.json`.
+- **Built-in updates** — checks GitHub for a newer release, notifies you,
+  and updates in one click (`git pull` + reinstall). Uninstall from the
+  settings window too. See [Updates](#updates).
 - **Custom rate alerts** — e.g. "warn me when my weekly usage grows by
   more than 20 pp over a 12 h sliding window". Defined in
   `settings.json` (see [Settings](#settings)).
@@ -104,24 +107,37 @@ extension is not packaged — install it manually from
 <https://extensions.gnome.org/extension/615/appindicator-support/>. The
 script prints a reminder if it is not enabled.
 
-### Upgrade
+### Updates
+
+The indicator checks GitHub for a newer release a few seconds after
+launch and every 6 h afterwards (an unauthenticated request — nothing
+about you is sent; disable it under **Settings ▸ Maintenance**). When a
+newer version exists you get a one-shot notification, a **_Update
+available (vX.Y.Z)_** row in the menu, and a status line at the bottom of
+the settings window. Click it (or *Update now* in **Maintenance**) and it
+runs `update.sh` in a terminal: `git pull --ff-only`, then `install.sh`
+with your autostart choice preserved — no logout required. Your
+`settings.json` and `history.jsonl` are untouched.
+
+You can always do it by hand:
 
 ```bash
-cd ~/Projects/claude-usage-tab
-git pull
-./install.sh
+cd ~/Projects/claude-usage-tab   # wherever you cloned it
+./update.sh                      # git pull + reinstall
+# or the long form:  git pull && ./install.sh
 ```
 
-`install.sh` is idempotent: it refreshes the icons and `.desktop`
-entries, then kills the running daemon and relaunches it against the
-new code — no logout required. Your `settings.json` and
-`history.jsonl` are untouched.
+The current version is shown under **Settings ▸ Maintenance** and in
+the `VERSION` file.
 
 ### Uninstall
 
+From the app: **Settings ▸ Maintenance ▸ Uninstall the app…** (tick the
+box to also wipe your data). Or from a terminal:
+
 ```bash
 ./uninstall.sh           # remove the indicator, keep settings/history
-./uninstall.sh --purge   # also wipe ~/.config and ~/.cache data
+./uninstall.sh --purge   # also wipe settings, history and stored accounts
 ```
 
 System packages and the GNOME extension are left in place — remove
