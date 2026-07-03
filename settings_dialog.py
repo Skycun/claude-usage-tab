@@ -23,7 +23,6 @@ from settings import (
     Settings,
     TopbarSettings,
     VALID_CLAUDE_TOPBAR_METRICS,
-    VALID_CODEX_TOPBAR_METRICS,
     sanitize_separator,
     save_settings,
 )
@@ -36,15 +35,6 @@ _SAMPLE_CLAUDE = {
         "five_hour": {"utilization": 24},
         "seven_day": {"utilization": 5},
         "seven_day_sonnet": {"utilization": 12},
-    },
-}
-_SAMPLE_CODEX = {
-    "status": "ok",
-    "data": {
-        "rate_limit": {
-            "primary_window": {"used_percent": 42},
-            "secondary_window": {"used_percent": 5},
-        }
     },
 }
 
@@ -79,9 +69,6 @@ class SettingsDialog(Gtk.Window):
         )
         notebook.append_page(
             self._build_topbar_tab(), Gtk.Label(label=t("dlg_tab_topbar"))
-        )
-        notebook.append_page(
-            self._build_codex_tab(), Gtk.Label(label=t("dlg_tab_codex"))
         )
         notebook.append_page(
             self._build_accounts_tab(), Gtk.Label(label=t("dlg_tab_accounts"))
@@ -141,16 +128,7 @@ class SettingsDialog(Gtk.Window):
 
         box.pack_start(Gtk.Separator(), False, False, 4)
 
-        # Codex segment + metric picks.
-        self.chk_show_codex = self._check(t("dlg_show_codex"), tb.show_codex)
-        box.pack_start(self.chk_show_codex, False, False, 0)
-        self.codex_metric_checks = self._metric_checks(
-            VALID_CODEX_TOPBAR_METRICS, tb.codex_metrics, box
-        )
-
-        box.pack_start(Gtk.Separator(), False, False, 4)
-
-        # Format & order toggles.
+        # Format toggles.
         self.chk_prefix = self._check(
             t("dlg_provider_prefix"), tb.show_provider_prefix
         )
@@ -168,24 +146,6 @@ class SettingsDialog(Gtk.Window):
 
         grid = Gtk.Grid(column_spacing=12, row_spacing=10)
         row = 0
-        grid.attach(self._label(t("dlg_order")), 0, row, 1, 1)
-        self.cmb_order = Gtk.ComboBoxText()
-        self.cmb_order.append("claude_first", t("dlg_order_claude_first"))
-        self.cmb_order.append("codex_first", t("dlg_order_codex_first"))
-        self.cmb_order.set_active_id(
-            "claude_first" if tb.claude_first else "codex_first"
-        )
-        self.cmb_order.connect("changed", self._on_change)
-        grid.attach(self.cmb_order, 1, row, 1, 1)
-        row += 1
-
-        grid.attach(self._label(t("dlg_separator")), 0, row, 1, 1)
-        self.ent_sep = Gtk.Entry(text=tb.separator)
-        self.ent_sep.set_max_length(8)
-        self.ent_sep.connect("changed", self._on_change)
-        grid.attach(self.ent_sep, 1, row, 1, 1)
-        row += 1
-
         grid.attach(self._label(t("dlg_metric_separator")), 0, row, 1, 1)
         self.ent_msep = Gtk.Entry(text=tb.metric_separator)
         self.ent_msep.set_max_length(8)
@@ -200,18 +160,6 @@ class SettingsDialog(Gtk.Window):
         grid.attach(self.spin_decimals, 1, row, 1, 1)
         box.pack_start(grid, False, False, 0)
 
-        return box
-
-    # --------------------------------------------------------------- tab: codex
-
-    def _build_codex_tab(self) -> Gtk.Widget:
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        box.set_border_width(12)
-        self.chk_codex_enabled = self._check(
-            t("dlg_codex_enabled"), self.settings.codex_enabled
-        )
-        box.pack_start(self.chk_codex_enabled, False, False, 0)
-        box.pack_start(self._dim(t("dlg_codex_enabled_hint")), False, False, 0)
         return box
 
     # ------------------------------------------------------------ tab: accounts
@@ -311,22 +259,15 @@ class SettingsDialog(Gtk.Window):
         claude_metrics = tuple(
             m for m, chk in self.claude_metric_checks.items() if chk.get_active()
         )
-        codex_metrics = tuple(
-            m for m, chk in self.codex_metric_checks.items() if chk.get_active()
-        )
         return TopbarSettings(
             show_claude=self.chk_show_claude.get_active(),
-            show_codex=self.chk_show_codex.get_active(),
             claude_metrics=claude_metrics,
-            codex_metrics=codex_metrics,
-            claude_first=self.cmb_order.get_active_id() != "codex_first",
             show_provider_prefix=self.chk_prefix.get_active(),
             show_alert_prefix=self.chk_alert_prefix.get_active(),
             metric_labels=self.chk_metric_labels.get_active(),
             compact=self.chk_compact.get_active(),
             # Mirror the loader's sanitization so the preview matches what
             # actually gets saved (non-ASCII is stripped; empty → default).
-            separator=sanitize_separator(self.ent_sep.get_text(), " | "),
             metric_separator=sanitize_separator(self.ent_msep.get_text(), " . "),
             percent_decimals=int(self.spin_decimals.get_value()),
         )
@@ -354,7 +295,6 @@ class SettingsDialog(Gtk.Window):
             lang=self.cmb_lang.get_active_id() or "fr",
             poll_seconds=int(self.spin_poll.get_value()),
             builtin_thresholds=self._collect_thresholds(),
-            codex_enabled=self.chk_codex_enabled.get_active(),
             accounts_enabled=self.chk_accounts_enabled.get_active(),
             account_switch_enabled=self.chk_account_switch.get_active(),
             topbar=self._collect_topbar(),
@@ -362,9 +302,7 @@ class SettingsDialog(Gtk.Window):
 
     def _update_preview(self) -> None:
         tb = self._collect_topbar()
-        body, _ = topbar.compose_label(
-            _SAMPLE_CLAUDE, _SAMPLE_CODEX, tb, has_alerts=False
-        )
+        body, _ = topbar.compose_label(_SAMPLE_CLAUDE, tb, has_alerts=False)
         if not (body and body.strip()):
             text = t("dlg_preview_icon_only")
         else:

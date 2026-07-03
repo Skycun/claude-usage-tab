@@ -34,16 +34,14 @@ to check how much budget you have left.
   - *Settings…* item — opens a GTK window to customise the display
     (see [Settings](#settings)).
   - One-click refresh with last-update timestamp.
-- **Customisable top-bar** — show/hide each provider, pick which metrics
-  appear, reorder, toggle prefixes, per-metric labels (`5h 42% · 7j 78%`),
-  compact mode, separators. Set it all from the settings window with a
-  live preview.
+- **Customisable top-bar** — show/hide the label, pick which metrics
+  appear, toggle prefixes, per-metric labels (`5h 42% · 7j 78%`),
+  compact mode, metric separator. Set it all from the settings window
+  with a live preview.
 - **Multi-account switcher** — remembers every Claude account you sign in
   as, shows each one's 5h / 7j usage in a *Claude accounts* submenu, and
   (opt-in) switches which account Claude Code uses on its next launch.
   See [Multiple accounts](#multiple-accounts).
-- **Codex master switch** — turn the whole Codex integration off
-  (no polling, no UI) from the settings window.
 - **Bilingual UI** — French (default) and English. Switch in the
   settings window, via `CLAUDE_USAGE_LANG=en`, or by editing `settings.json`.
 - **Custom rate alerts** — e.g. "warn me when my weekly usage grows by
@@ -258,17 +256,14 @@ endpoint is rate-limited. Open the menu — the refresh line will say
 ## Settings
 
 Pick *Settings…* in the menu to open a small GTK window — the simplest
-way to tweak the display. It has four tabs:
+way to tweak the display. It has three tabs:
 
 - **General** — language, refresh cadence, built-in alert thresholds.
-- **Top-bar** — show/hide the Claude and Codex segments independently,
-  choose which metrics each one shows (Claude: 5h / 7d / Sonnet; Codex:
-  primary / secondary window), provider order, the `C` / `X` prefixes,
-  the `/!\ ` alert prefix, **per-metric labels** (`5h 42% · 7j 78%`),
-  a **compact** mode (one value per provider), and the separators. A
-  **live preview** at the bottom shows the resulting label as you toggle.
-- **Codex** — a master switch. When off, the daemon makes **no Codex
-  network calls** and hides the whole Codex section everywhere.
+- **Top-bar** — show/hide the label, choose which metrics appear
+  (5h / 7d / Sonnet), the `C` prefix, the `/!\ ` alert prefix,
+  **per-metric labels** (`5h 42% · 7j 78%`), a **compact** mode (one
+  value only), and the metric separator. A **live preview** at the
+  bottom shows the resulting label as you toggle.
 - **Accounts** — enable multi-account tracking and, separately, the
   (invasive) account switch. See [Multiple accounts](#multiple-accounts).
 
@@ -286,20 +281,15 @@ stderr and the defaults are kept in memory.
   "lang": "fr",              // "fr" or "en"
   "poll_seconds": 60,        // minimum 10
   "builtin_thresholds": [80, 95],
-  "codex_enabled": true,     // master switch: off = no Codex polling/UI
   "accounts_enabled": true,          // capture + show all Claude accounts
   "account_switch_enabled": false,   // opt-in: allow switching (writes ~/.claude)
   "topbar": {
-    "show_claude": true,             // show the Claude segment in the top-bar
-    "show_codex": true,              // show the Codex segment in the top-bar
+    "show_claude": true,             // show the top-bar label
     "claude_metrics": ["five_hour", "seven_day"],   // + "seven_day_sonnet"
-    "codex_metrics": ["codex_primary", "codex_secondary"],
-    "claude_first": true,            // provider order
-    "show_provider_prefix": true,    // the "C" / "X" letters
+    "show_provider_prefix": true,    // the "C" letter
     "show_alert_prefix": true,       // the "/!\\" prefix when an alert is active
     "metric_labels": false,          // prefix each value with 5h / 7j / S7
-    "compact": false,                // one value (the worst) per provider
-    "separator": " | ",              // between providers (ASCII + · • – —)
+    "compact": false,                // one value (the worst) only
     "metric_separator": " . ",       // between metrics (ASCII + · • – —)
     "percent_decimals": 0            // 0–2
   },
@@ -308,7 +298,6 @@ stderr and the defaults are kept in memory.
       "id": "daily-burn",
       "enabled": false,
       "metric": "seven_day",       // five_hour | seven_day | seven_day_sonnet
-                                   //   | codex_primary | codex_secondary
       "delta_pp": 20,              // trigger when delta > 20 percentage points
       "window_hours": 12,          // sliding window size
       "cooldown_hours": 6,         // silence window after firing

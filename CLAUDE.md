@@ -34,17 +34,17 @@ test_claude_usage.sh         # one-shot curl to the OAuth endpoint
 
 No package, no venv, no build. Sibling modules importing each other
 directly — **not** a package (no ``__init__.py``). Dependencies are
-shallow: ``strings`` is a leaf; ``settings`` and ``api`` depend only on
-``strings``; ``alerts`` depends on ``settings``; ``accounts`` depends on
-``api`` + ``settings``; ``topbar`` depends on ``settings`` + ``strings``;
-``settings_dialog`` depends on ``settings`` + ``topbar`` + ``strings`` (and
-GTK); the main script imports the rest.
+shallow: ``strings``, ``settings`` and ``api`` are leaves (``api`` needs
+only ``requests``); ``alerts`` depends on ``settings``; ``accounts``
+depends on ``api`` + ``settings``; ``topbar`` depends on ``settings`` +
+``strings``; ``settings_dialog`` depends on ``settings`` + ``topbar`` +
+``strings`` (and GTK); the main script imports the rest.
 
-User-visible display options (Codex on/off, top-bar segments/metrics,
-order, prefixes, compact, separators) live in ``settings.py``
-(``Settings`` + ``TopbarSettings``) and are edited via the GTK
-``settings_dialog`` — **not** constants in the script. The dialog writes
-``settings.json`` and the daemon applies it live (``apply_settings_now``).
+User-visible display options (top-bar metrics, prefixes, compact, metric
+separator) live in ``settings.py`` (``Settings`` + ``TopbarSettings``) and
+are edited via the GTK ``settings_dialog`` — **not** constants in the
+script. The dialog writes ``settings.json`` and the daemon applies it live
+(``apply_settings_now``).
 
 Runtime files (never committed):
 - ``~/.config/claude-usage-indicator/settings.json`` — user config, auto-created on first run

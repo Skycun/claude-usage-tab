@@ -79,19 +79,35 @@ def _mode_of(path: Path, default: int) -> int:
 
 
 def _atomic_write_json(path: Path, data: object, *, mode: int) -> None:
-    """Write ``data`` as JSON to ``path`` atomically, then ``chmod`` it.
+    """Write ``data`` as JSON to ``path`` atomically with restrictive perms.
 
-    Writes a sibling ``.tmp`` file and ``os.replace``s it into place so a
-    crash mid-write can never leave a half-written credentials file. Raises
-    ``OSError`` on failure — callers decide whether that's fatal.
+    The sibling ``.tmp`` file is *created* already at ``mode`` (``0600`` for
+    credential blobs) via ``os.open`` — a write-then-``chmod`` sequence would
+    leave the token material briefly group/world-readable in between. It is
+    then ``os.replace``d into place so a crash mid-write can never leave a
+    half-written credentials file. Raises ``OSError`` on failure — callers
+    decide whether that's fatal.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
+    # Keep our own config / accounts dir owner-only. Never widen ~/.claude,
+    # which Claude Code owns — only harden directories we create.
+    if path.parent in (ACCOUNTS_DIR, SETTINGS_DIR):
+        try:
+            os.chmod(path.parent, 0o700)
+        except OSError:
+            pass
     tmp = path.parent / (path.name + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2))
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
     try:
-        os.chmod(tmp, mode)
+        with os.fdopen(fd, "w") as f:
+            f.write(json.dumps(data, indent=2))
+        os.chmod(tmp, mode)  # enforce mode even if the temp file pre-existed
     except OSError:
-        pass
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
     os.replace(tmp, path)
 
 

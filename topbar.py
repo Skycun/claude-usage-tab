@@ -5,9 +5,9 @@ Pure functions only — no GTK, no ``self``. The indicator calls
 on synthetic sample data to render a live preview. Keeping it here keeps the
 indicator file small and the rendering logic testable in isolation.
 
-Status segments (rate-limited / error / login-expired) still come from
-``strings.py`` so they stay translatable; only the "ok" segment is built
-dynamically from the selected metrics.
+Status segments (rate-limited / error) still come from ``strings.py`` so they
+stay translatable; only the "ok" segment is built dynamically from the
+selected metrics.
 """
 
 from __future__ import annotations
@@ -15,12 +15,11 @@ from __future__ import annotations
 from settings import TopbarSettings
 from strings import t
 
-# Provider prefixes are symbols, not translatable words — kept ASCII so the
-# top-bar font renders them (see the no-emoji rule in CLAUDE.md).
+# Provider prefix is a symbol, not a translatable word — kept ASCII so the
+# top-bar font renders it (see the no-emoji rule in CLAUDE.md).
 CLAUDE_PREFIX = "C"
-CODEX_PREFIX = "X"
 
-# Where each top-bar metric lives inside a provider's data payload.
+# Where each top-bar metric lives inside the Claude data payload.
 _CLAUDE_METRIC_PATHS: dict[str, tuple[str, str]] = {
     "five_hour": ("five_hour", "utilization"),
     "seven_day": ("seven_day", "utilization"),
@@ -32,42 +31,12 @@ _CLAUDE_METRIC_LABEL_KEYS: dict[str, str] = {
     "seven_day": "weekly_7d",
     "seven_day_sonnet": "sonnet_7d",
 }
-_CODEX_METRIC_WINDOWS: dict[str, str] = {
-    "codex_primary": "primary_window",
-    "codex_secondary": "secondary_window",
-}
-
-
-def codex_window_label(seconds: int | None) -> str:
-    """Map ``limit_window_seconds`` to a localized short label.
-
-    Buckets to the nearest of {1h, 5h, 1d, 7d, 30d}, requiring <35% relative
-    error; falls back to ``codex_window_other`` (``w?``). Pure and reused by
-    both the top-bar label and the dropdown rows in the indicator.
-    """
-    if not seconds or seconds <= 0:
-        return t("codex_window_other")
-    buckets = (
-        (3600, "codex_window_1h"),
-        (5 * 3600, "codex_window_5h"),
-        (86_400, "codex_window_1d"),
-        (7 * 86_400, "codex_window_7d"),
-        (30 * 86_400, "codex_window_30d"),
-    )
-    best_key = "codex_window_other"
-    best_ratio = 0.35
-    for ref, key in buckets:
-        ratio = abs(seconds - ref) / ref
-        if ratio < best_ratio:
-            best_ratio = ratio
-            best_key = key
-    return t(best_key)
 
 
 def _to_float(value: object) -> float:
     """Coerce an untrusted API value to float, defaulting to 0.
 
-    The usage endpoints are undocumented; a field may arrive as a string,
+    The usage endpoint is undocumented; a field may arrive as a string,
     null, or be missing entirely. We never let that raise — a bad value is
     just 0% rather than a crash that would kill the poll timer.
     """
@@ -93,22 +62,6 @@ def _claude_pairs(
         node = data.get(path[0]) or {}
         label = t(_CLAUDE_METRIC_LABEL_KEYS.get(metric, ""))
         out.append((label, _to_float(node.get(path[1]))))
-    return out
-
-
-def _codex_pairs(
-    data: dict, metrics: tuple[str, ...]
-) -> list[tuple[str, float]]:
-    """Return ``(short_label, value)`` pairs for the selected Codex metrics."""
-    rl = data.get("rate_limit") or {}
-    out: list[tuple[str, float]] = []
-    for metric in metrics:
-        window_key = _CODEX_METRIC_WINDOWS.get(metric)
-        if window_key is None:
-            continue
-        node = rl.get(window_key) or {}
-        label = codex_window_label(node.get("limit_window_seconds"))
-        out.append((label, _to_float(node.get("used_percent"))))
     return out
 
 
@@ -148,59 +101,35 @@ def claude_segment(state: dict | None, tb: TopbarSettings) -> str | None:
     return _ok_segment(CLAUDE_PREFIX, _claude_pairs(data, tb.claude_metrics), tb)
 
 
-def codex_segment(state: dict | None, tb: TopbarSettings) -> str | None:
-    if state is None or state.get("status") == "absent":
-        return None
-    status = state.get("status")
-    if status == "login_expired":
-        return t("label_seg_codex_login")
-    if status == "rate_limited":
-        return t("label_seg_codex_rl")
-    if status == "error":
-        return t("label_seg_codex_err")
-    data = state.get("data") or {}
-    return _ok_segment(CODEX_PREFIX, _codex_pairs(data, tb.codex_metrics), tb)
-
-
 def compose_label(
     claude_state: dict | None,
-    codex_state: dict | None,
     tb: TopbarSettings,
     has_alerts: bool,
 ) -> tuple[str | None, str]:
     """Return ``(body, guide)`` for ``Indicator.set_label``.
 
     ``body`` is:
-      * ``None``  — neither provider is connected (caller shows "not signed in")
-      * ``" "``   — connected but the user hid every segment (icon-only)
+      * ``None``  — Claude is not connected (caller shows "not signed in")
+      * ``" "``   — connected but the user hid the segment (icon-only)
       * text      — the composed label, wrapped in spaces, with an optional
                     ``/!\\`` alert prefix.
 
     ``guide`` is always the widest plausible string so AppIndicator reserves
     enough width regardless of the current selection.
     """
-    guide = t("label_guide_both")
+    guide = t("label_guide")
 
     claude_connected = (
         claude_state is not None and claude_state.get("status") != "absent"
     )
-    codex_connected = (
-        codex_state is not None and codex_state.get("status") != "absent"
-    )
-    if not claude_connected and not codex_connected:
+    if not claude_connected:
         return None, guide
 
     claude_seg = claude_segment(claude_state, tb) if tb.show_claude else None
-    codex_seg = codex_segment(codex_state, tb) if tb.show_codex else None
-
-    ordered = (
-        [claude_seg, codex_seg] if tb.claude_first else [codex_seg, claude_seg]
-    )
-    parts = [seg for seg in ordered if seg]
-    if not parts:
+    if not claude_seg:
         return " ", guide
 
-    body = tb.separator.join(parts)
+    body = claude_seg
     if has_alerts and tb.show_alert_prefix:
         body = f" {t('label_alert_prefix')} {body} "
     else:

@@ -26,20 +26,16 @@ VALID_METRICS = (
     "five_hour",
     "seven_day",
     "seven_day_sonnet",
-    "codex_primary",
-    "codex_secondary",
 )
 
-# Metrics that can appear in the top-bar label, per provider. A subset is
-# user-selectable in the settings dialog; the dropdown menu always shows
-# the full detail regardless of these.
+# Metrics that can appear in the top-bar label. A subset is user-selectable
+# in the settings dialog; the dropdown menu always shows the full detail
+# regardless of these.
 VALID_CLAUDE_TOPBAR_METRICS = ("five_hour", "seven_day", "seven_day_sonnet")
-VALID_CODEX_TOPBAR_METRICS = ("codex_primary", "codex_secondary")
 DEFAULT_CLAUDE_TOPBAR_METRICS = ("five_hour", "seven_day")
-DEFAULT_CODEX_TOPBAR_METRICS = ("codex_primary", "codex_secondary")
 
-# v2 introduced ``codex_enabled`` and the ``topbar`` block. v1 files load
-# fine — the new keys default gracefully via ``.get(...)``.
+# v2 introduced the ``topbar`` block. v1 files load fine — the new keys
+# default gracefully via ``.get(...)``.
 SCHEMA_VERSION = 2
 
 
@@ -58,25 +54,21 @@ class AlertDef:
 class TopbarSettings:
     """How the GNOME top-bar label is composed.
 
-    ``show_*`` gate whole provider segments; ``*_metrics`` pick which values
-    appear inside a segment. An empty metric tuple hides that provider's
-    segment even when ``show_*`` is True (a deliberate, honoured state — not
+    ``show_claude`` gates the whole label segment; ``claude_metrics`` picks
+    which values appear inside it. An empty metric tuple hides the segment
+    even when ``show_claude`` is True (a deliberate, honoured state — not
     coerced back to the default). Separators are kept ASCII-safe because the
     top-bar font drops most non-ASCII glyphs.
     """
 
     show_claude: bool = True
-    show_codex: bool = True
     claude_metrics: tuple[str, ...] = DEFAULT_CLAUDE_TOPBAR_METRICS
-    codex_metrics: tuple[str, ...] = DEFAULT_CODEX_TOPBAR_METRICS
-    claude_first: bool = True
     show_provider_prefix: bool = True
     show_alert_prefix: bool = True
     # Prefix each value with its short window label ("5h 42% . 7j 78%")
     # instead of bare percentages. Pairs well with show_provider_prefix off.
     metric_labels: bool = False
     compact: bool = False
-    separator: str = " | "
     metric_separator: str = " . "
     percent_decimals: int = 0
 
@@ -87,7 +79,6 @@ class Settings:
     lang: str = "fr"
     poll_seconds: int = 120
     builtin_thresholds: tuple[int, ...] = (80, 95)
-    codex_enabled: bool = True
     # Multi-account: capture every account you sign in as and show their
     # usage in the menu. ``account_switch_enabled`` additionally allows the
     # (invasive) switch that rewrites ~/.claude — off by default.
@@ -102,20 +93,15 @@ DEFAULT_SETTINGS_JSON: dict[str, Any] = {
     "lang": "fr",
     "poll_seconds": 120,
     "builtin_thresholds": [80, 95],
-    "codex_enabled": True,
     "accounts_enabled": True,
     "account_switch_enabled": False,
     "topbar": {
         "show_claude": True,
-        "show_codex": True,
         "claude_metrics": list(DEFAULT_CLAUDE_TOPBAR_METRICS),
-        "codex_metrics": list(DEFAULT_CODEX_TOPBAR_METRICS),
-        "claude_first": True,
         "show_provider_prefix": True,
         "show_alert_prefix": True,
         "metric_labels": False,
         "compact": False,
-        "separator": " | ",
         "metric_separator": " . ",
         "percent_decimals": 0,
     },
@@ -243,23 +229,15 @@ def _validate_topbar(raw: Any) -> TopbarSettings:
         decimals = 2
     return TopbarSettings(
         show_claude=_coerce_bool(raw.get("show_claude"), True),
-        show_codex=_coerce_bool(raw.get("show_codex"), True),
         claude_metrics=_coerce_metrics(
             raw.get("claude_metrics"),
             VALID_CLAUDE_TOPBAR_METRICS,
             DEFAULT_CLAUDE_TOPBAR_METRICS,
         ),
-        codex_metrics=_coerce_metrics(
-            raw.get("codex_metrics"),
-            VALID_CODEX_TOPBAR_METRICS,
-            DEFAULT_CODEX_TOPBAR_METRICS,
-        ),
-        claude_first=_coerce_bool(raw.get("claude_first"), True),
         show_provider_prefix=_coerce_bool(raw.get("show_provider_prefix"), True),
         show_alert_prefix=_coerce_bool(raw.get("show_alert_prefix"), True),
         metric_labels=_coerce_bool(raw.get("metric_labels"), False),
         compact=_coerce_bool(raw.get("compact"), False),
-        separator=sanitize_separator(raw.get("separator"), " | "),
         metric_separator=sanitize_separator(raw.get("metric_separator"), " . "),
         percent_decimals=decimals,
     )
@@ -339,7 +317,6 @@ def _from_raw(raw: dict) -> Settings:
         lang=lang,
         poll_seconds=poll_seconds,
         builtin_thresholds=tuple(thresholds),
-        codex_enabled=_coerce_bool(raw.get("codex_enabled"), True),
         accounts_enabled=_coerce_bool(raw.get("accounts_enabled"), True),
         account_switch_enabled=_coerce_bool(
             raw.get("account_switch_enabled"), False
@@ -367,15 +344,11 @@ def alert_to_dict(a: AlertDef) -> dict[str, Any]:
 def topbar_to_dict(tb: TopbarSettings) -> dict[str, Any]:
     return {
         "show_claude": tb.show_claude,
-        "show_codex": tb.show_codex,
         "claude_metrics": list(tb.claude_metrics),
-        "codex_metrics": list(tb.codex_metrics),
-        "claude_first": tb.claude_first,
         "show_provider_prefix": tb.show_provider_prefix,
         "show_alert_prefix": tb.show_alert_prefix,
         "metric_labels": tb.metric_labels,
         "compact": tb.compact,
-        "separator": tb.separator,
         "metric_separator": tb.metric_separator,
         "percent_decimals": tb.percent_decimals,
     }
@@ -388,7 +361,6 @@ def settings_to_dict(s: Settings) -> dict[str, Any]:
         "lang": s.lang,
         "poll_seconds": s.poll_seconds,
         "builtin_thresholds": list(s.builtin_thresholds),
-        "codex_enabled": s.codex_enabled,
         "accounts_enabled": s.accounts_enabled,
         "account_switch_enabled": s.account_switch_enabled,
         "topbar": topbar_to_dict(s.topbar),
