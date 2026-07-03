@@ -32,7 +32,7 @@ import accounts
 import updates
 from alerts import History, evaluate_alerts
 from api import fetch_usage, parse_iso, read_account, read_token
-from formatting import fmt_secs, format_remaining, progress_bar
+from formatting import fmt_secs, format_local, format_remaining, progress_bar
 from settings import (
     SETTINGS_PATH,
     VALID_CLAUDE_TOPBAR_METRICS,
@@ -135,6 +135,8 @@ class ClaudeUsageApp(rumps.App):
         self.update_info: updates.UpdateInfo | None = updates.cached()
         self.account_states: list[dict] = []
         self._last_claude_state: dict | None = None
+        # One-shot timers kept alive while a deferred render is pending.
+        self._deferred: set = set()
 
         # Poll timer (re-created live if the interval changes).
         self._poll = rumps.Timer(self._tick, max(10, self.settings.poll_seconds))
@@ -158,6 +160,31 @@ class ClaudeUsageApp(rumps.App):
             self._run_tick()
         except Exception as e:  # noqa: BLE001 — a bad tick must not kill the app
             print(f"tick error: {type(e).__name__}: {e}", file=sys.stderr)
+
+    def _defer(self, fn) -> None:
+        """Run ``fn`` on the next runloop turn instead of inline.
+
+        Menu-item callbacks must not rebuild the menu (``menu.clear()``)
+        synchronously from inside their own click dispatch — the GTK app
+        defers the same work via ``GLib.idle_add`` for exactly this reason.
+        A self-stopping one-shot ``rumps.Timer`` is the rumps equivalent; we
+        keep a reference in ``self._deferred`` so it isn't GC'd before firing.
+        """
+
+        def _run(timer: object) -> None:
+            try:
+                timer.stop()
+            except Exception:  # noqa: BLE001
+                pass
+            self._deferred.discard(timer)
+            try:
+                fn()
+            except Exception as e:  # noqa: BLE001
+                print(f"deferred error: {type(e).__name__}: {e}", file=sys.stderr)
+
+        timer = rumps.Timer(_run, 0.05)
+        self._deferred.add(timer)
+        timer.start()
 
     def _run_tick(self) -> None:
         self._reload_settings_if_needed()
@@ -350,8 +377,8 @@ class ClaudeUsageApp(rumps.App):
                 ("seven_day_sonnet", so_util, t("sonnet_7d")),
             )
         )
-        self._check_thresholds("five_hour", t("session_5h"), f_util)
-        self._check_thresholds("seven_day", t("weekly_7d"), s_util)
+        self._check_thresholds("five_hour", t("session_5h"), f_util, f_reset)
+        self._check_thresholds("seven_day", t("weekly_7d"), s_util, s_reset)
 
         self.history.append("five_hour", f_util, now)
         self.history.append("seven_day", s_util, now)
@@ -372,7 +399,9 @@ class ClaudeUsageApp(rumps.App):
             self.prev_util[metric] = util
         return reset_metrics
 
-    def _check_thresholds(self, metric: str, label: str, util: float) -> None:
+    def _check_thresholds(
+        self, metric: str, label: str, util: float, reset: datetime | None
+    ) -> None:
         seen = self.seen_thresholds.get(metric)
         if seen is None:
             return
@@ -381,7 +410,11 @@ class ClaudeUsageApp(rumps.App):
                 seen.add(threshold)
                 notify(
                     t("threshold_title", label=label, util=util),
-                    t("threshold_body", abs=t("dash"), rem=t("dash")),
+                    t(
+                        "threshold_body",
+                        abs=format_local(reset),
+                        rem=format_remaining(reset),
+                    ),
                 )
 
     # -- menu rows -------------------------------------------------------
@@ -557,8 +590,11 @@ class ClaudeUsageApp(rumps.App):
         if lang != current_lang():
             set_lang(lang)
             setup_locale(lang)
-        # Re-render from the last known state (no network hit).
-        self._render(self._last_claude_state, datetime.now(timezone.utc))
+        # Deferred re-render (settings already applied) — avoid rebuilding the
+        # menu from inside the toggle's own click handler. No network hit.
+        self._defer(
+            lambda: self._render(self._last_claude_state, datetime.now(timezone.utc))
+        )
 
     def _toggle_setting(self, attr: str) -> None:
         self._save_and_apply(
@@ -592,11 +628,14 @@ class ClaudeUsageApp(rumps.App):
             notify(t("login_title_fail"), t("login_body_fail"))
 
     def _on_refresh(self, _sender: object = None) -> None:
-        self._tick()
+        # Deferred: don't rebuild the menu from inside its own click handler.
+        self._defer(self._tick)
 
     def _on_clear_alerts(self, _sender: object = None) -> None:
         self.active_alerts.clear()
-        self._render(self._last_claude_state, datetime.now(timezone.utc))
+        self._defer(
+            lambda: self._render(self._last_claude_state, datetime.now(timezone.utc))
+        )
 
     def _on_update(self, _sender: object = None) -> None:
         latest = self.update_info.latest if self.update_info else "?"
@@ -623,7 +662,7 @@ class ClaudeUsageApp(rumps.App):
             notify(t("acct_switch_ok_title"), t("acct_switch_ok_body", email=email))
         else:
             notify(t("acct_switch_fail_title"), t("acct_switch_fail_body"))
-        self._tick()
+        self._defer(self._tick)
 
     def _on_forget(self, acct_id: str, email: str) -> None:
         if rumps.alert(
@@ -634,7 +673,7 @@ class ClaudeUsageApp(rumps.App):
         ) != 1:
             return
         accounts.forget(acct_id)
-        self._tick()
+        self._defer(self._tick)
 
     # -- update checks ---------------------------------------------------
 
