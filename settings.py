@@ -76,7 +76,7 @@ class TopbarSettings:
 @dataclass(frozen=True)
 class Settings:
     schema_version: int = SCHEMA_VERSION
-    lang: str = "fr"
+    lang: str = "en"
     poll_seconds: int = 120
     builtin_thresholds: tuple[int, ...] = (80, 95)
     # Multi-account: capture every account you sign in as and show their
@@ -92,7 +92,7 @@ class Settings:
 
 DEFAULT_SETTINGS_JSON: dict[str, Any] = {
     "schema_version": SCHEMA_VERSION,
-    "lang": "fr",
+    "lang": "en",
     "poll_seconds": 120,
     "builtin_thresholds": [80, 95],
     "accounts_enabled": True,
@@ -116,7 +116,7 @@ DEFAULT_SETTINGS_JSON: dict[str, Any] = {
             "delta_pp": 20,
             "window_hours": 12,
             "cooldown_hours": 6,
-            "label": "Conso hebdo rapide",
+            "label": "Fast weekly burn",
         }
     ],
 }
@@ -285,7 +285,7 @@ def _validate_alert(raw: dict, index: int) -> AlertDef | None:
 
 
 def _from_raw(raw: dict) -> Settings:
-    lang = str(raw.get("lang") or "fr")
+    lang = str(raw.get("lang") or "en")
     poll_seconds = _coerce_int(raw.get("poll_seconds"), 120, minimum=10)
 
     thresholds_raw = raw.get("builtin_thresholds") or [80, 95]

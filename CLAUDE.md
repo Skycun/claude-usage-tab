@@ -97,8 +97,8 @@ Runtime files (never committed):
    The cache is not encrypted and the user may share it when debugging.
 
 6. **New user-visible strings go through ``strings.py``.** Always add
-   both FR and EN keys. Missing EN falls back to FR with a stderr
-   warning — fine for debugging, not OK to ship.
+   both EN and FR keys. English is the default; a missing key falls back
+   to English with a stderr warning — fine for debugging, not OK to ship.
 
 7. **The account store holds several OAuth tokens — guard it like #2.**
    ``accounts/<id>.json`` files are the only place besides ``~/.claude``

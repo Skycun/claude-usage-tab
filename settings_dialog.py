@@ -102,7 +102,7 @@ class SettingsDialog(Gtk.Window):
         self.cmb_lang = Gtk.ComboBoxText()
         for code in SUPPORTED_LANGS:
             self.cmb_lang.append(code, t(f"dlg_lang_{code}"))
-        active = self.settings.lang if self.settings.lang in SUPPORTED_LANGS else "fr"
+        active = self.settings.lang if self.settings.lang in SUPPORTED_LANGS else "en"
         self.cmb_lang.set_active_id(active)
         grid.attach(self.cmb_lang, 1, row, 1, 1)
         row += 1
@@ -409,7 +409,7 @@ class SettingsDialog(Gtk.Window):
         return dataclasses.replace(
             self.settings,
             schema_version=SCHEMA_VERSION,
-            lang=self.cmb_lang.get_active_id() or "fr",
+            lang=self.cmb_lang.get_active_id() or "en",
             poll_seconds=int(self.spin_poll.get_value()),
             builtin_thresholds=self._collect_thresholds(),
             update_check_enabled=self.chk_update_check.get_active(),

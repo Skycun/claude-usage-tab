@@ -15,8 +15,8 @@ the GNOME top bar:
   * notifs:  on reset (new window), on crossing 80/95%, and on custom
              rate alerts defined in settings.json
 
-UI language is FR by default. ``CLAUDE_USAGE_LANG=en`` or ``lang: "en"``
-in ``~/.config/claude-usage-indicator/settings.json`` switches to English.
+UI language is English by default. ``CLAUDE_USAGE_LANG=fr`` or ``lang: "fr"``
+in ``~/.config/claude-usage-indicator/settings.json`` switches to French.
 
 Deps:
     Run ``./install.sh`` — it detects Ubuntu/Debian vs Fedora/RHEL and

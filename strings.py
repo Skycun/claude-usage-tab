@@ -1,7 +1,7 @@
 """Internationalised UI strings.
 
 One big dict keyed by language, then by message id. Missing keys fall back
-to French (the project's default). Looked up via :func:`t`.
+to English (the project's default). Looked up via :func:`t`.
 
 Language resolution order (highest wins):
   1. ``CLAUDE_USAGE_LANG`` env var
@@ -17,8 +17,8 @@ import os
 import sys
 from typing import Any
 
-DEFAULT_LANG = "fr"
-SUPPORTED_LANGS = ("fr", "en")
+DEFAULT_LANG = "en"
+SUPPORTED_LANGS = ("en", "fr")
 
 # Format placeholders use str.format syntax (``{name}``).
 # Keep keys stable — they're referenced from other modules.
