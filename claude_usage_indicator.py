@@ -61,6 +61,12 @@ from settings import (  # noqa: E402
 )
 from strings import current_lang, detect_lang, set_lang, setup_locale, t  # noqa: E402
 from topbar import compose_label  # noqa: E402
+from formatting import (  # noqa: E402
+    format_local,
+    format_remaining,
+    fmt_secs as _fmt_secs,
+    progress_bar,
+)
 import updates  # noqa: E402
 
 POLL_SECONDS = 120  # fallback when settings unavailable
@@ -150,43 +156,6 @@ def _run_script_in_terminal(script: str, *args: str) -> bool:
     inner = " ".join(parts)
     wrapped = f"{inner}; echo; read -rp 'Press Enter to close…' _"
     return spawn_terminal(["bash", "-lc", wrapped])
-
-
-def format_remaining(reset: datetime | None) -> str:
-    if not reset:
-        return t("dash")
-    delta = reset - datetime.now(timezone.utc)
-    secs = int(delta.total_seconds())
-    if secs <= 0:
-        return t("now")
-    hours, rem = divmod(secs, 3600)
-    minutes = rem // 60
-    if hours >= 24:
-        days, hours = divmod(hours, 24)
-        return t("duration_days_hours", d=days, h=hours)
-    if hours:
-        return t("duration_hours_minutes", h=hours, m=minutes)
-    return t("duration_minutes", m=minutes)
-
-
-def format_local(reset: datetime | None) -> str:
-    if not reset:
-        return t("dash")
-    return reset.astimezone().strftime(t("date_format"))
-
-
-def progress_bar(util: float, width: int = 10) -> str:
-    """Block-character progress bar (``\u2588\u2588\u2588\u2588\u2591\u2591\u2591\u2591\u2591\u2591``) \u2014 pre-restore look."""
-    filled = max(0, min(width, int(round(util / 100 * width))))
-    return "\u2588" * filled + "\u2591" * (width - filled)
-
-
-def _fmt_secs(secs: int) -> str:
-    if secs >= 3600:
-        return t("duration_hours_minutes", h=secs // 3600, m=(secs % 3600) // 60)
-    if secs >= 60:
-        return t("duration_minutes", m=secs // 60)
-    return t("duration_seconds", s=secs)
 
 
 class Indicator:

@@ -36,6 +36,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "open_settings_tip": "Ouvrir {url}",
         "edit_settings": "Réglages…",
         "clear_alerts": "Désactiver les alertes actives",
+        "menu_options": "Options",
         # updates
         "update_available": "Mise à jour disponible (v{ver})",
         "update_confirm_title": "Mettre à jour Claude Usage Tab ?",
@@ -165,6 +166,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "open_settings_tip": "Open {url}",
         "edit_settings": "Settings…",
         "clear_alerts": "Clear active alerts",
+        "menu_options": "Options",
         # updates
         "update_available": "Update available (v{ver})",
         "update_confirm_title": "Update Claude Usage Tab?",

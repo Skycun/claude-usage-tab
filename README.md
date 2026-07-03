@@ -145,6 +145,23 @@ use them).
 
 ---
 
+## macOS (experimental)
+
+There's a menu-bar build for macOS that reuses the same engine, driven by
+[`rumps`](https://github.com/jaredks/rumps) instead of GTK:
+
+```bash
+git clone https://github.com/Skycun/claude-usage-tab.git ~/claude-usage-tab
+cd ~/claude-usage-tab
+./install-macos.sh
+```
+
+It's newer and needs validation on real hardware — see
+[docs/macos.md](./docs/macos.md) for what's supported, the differences from
+the Linux build, and the known caveats (Keychain, notifications).
+
+---
+
 ## Settings
 
 Open **Settings…** from the menu — a small GTK window with four tabs:

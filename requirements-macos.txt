@@ -1,0 +1,5 @@
+# Python dependencies for the macOS menu-bar build.
+# Installed into a local .venv by install-macos.sh (macOS has no system
+# PyGObject constraint, so a venv is fine here — unlike the Linux build).
+rumps>=0.4.0      # NSStatusItem wrapper; pulls in pyobjc
+requests>=2.25

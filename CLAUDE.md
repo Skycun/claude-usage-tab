@@ -20,22 +20,32 @@ User-facing overview, install, and troubleshooting: [README.md](./README.md).
 ## Layout
 
 ```
-claude_usage_indicator.py    # Indicator class + main() — the UI
+claude_usage_indicator.py    # Linux: Indicator class + main() — the GTK UI
+claude_usage_menubar.py      # macOS: rumps menu-bar app (same engine)
 topbar.py                    # top-bar label composition (settings-driven)
+formatting.py                # shared pure render helpers (durations, bars, icon state)
 settings_dialog.py           # GTK settings window
-strings.py                   # i18n (FR/EN) — STRINGS dict + t()
+strings.py                   # i18n (EN default/FR) — STRINGS dict + t()
 settings.py                  # ~/.config/claude-usage-indicator/settings.json
-api.py                       # OAuth token + /api/oauth/usage fetcher + refresh
+api.py                       # OAuth token (+ macOS Keychain fallback) + usage fetch + refresh
 accounts.py                  # multi-account store + capture + switch + refresh
 alerts.py                    # history (~/.cache/.../history.jsonl) + engine
 updates.py                   # GitHub releases/latest check (throttled + cached)
 version.py                   # reads the VERSION file (single source of truth)
 VERSION                      # the version string (e.g. 1.0.0)
-install.sh / update.sh / uninstall.sh  # install (autostart prompt/flags),
-                             #   git-pull self-update, uninstall (+ --purge)
+install.sh / update.sh / uninstall.sh          # Linux install/self-update/uninstall
+install-macos.sh / update-macos.sh / uninstall-macos.sh  # macOS (venv + LaunchAgent)
 icons/                       # default, gray, full PNGs (bundled)
+docs/macos.md                # macOS build notes + caveats
 test_claude_usage.sh         # one-shot curl to the OAuth endpoint
 ```
+
+Two front-ends, one engine: `claude_usage_indicator.py` (GTK) and
+`claude_usage_menubar.py` (rumps) both drive the same UI-free modules
+(`api`, `settings`, `alerts`, `accounts`, `updates`, `topbar`, `strings`,
+`formatting`). Keep all logic in the shared modules — a fix should land once
+and benefit both platforms. The macOS build uses a pip venv (no PyGObject
+constraint there); Linux stays system-Python.
 
 No package, no venv, no build. Sibling modules importing each other
 directly — **not** a package (no ``__init__.py``). Dependencies are

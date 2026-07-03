@@ -8,6 +8,8 @@ the codebase. The indicator only cares about :func:`read_token`,
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,6 +19,15 @@ import requests
 CREDS_PATH = Path.home() / ".claude" / ".credentials.json"
 CONFIG_PATH = Path.home() / ".claude.json"
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+
+# On macOS, Claude Code may keep the OAuth blob in the login Keychain rather
+# than in a plaintext file. These are the service names it's been seen under;
+# we try each read-only via ``security`` and never print the result.
+_MACOS_KEYCHAIN_SERVICES = (
+    "Claude Code-credentials",
+    "Claude Code",
+    "claude-code",
+)
 
 # Claude Code's public OAuth client id + token endpoints. Undocumented, but
 # stable and widely used; the token endpoint moved from console.anthropic.com
@@ -50,11 +61,53 @@ def _safe_load_json(path: Path) -> dict:
         return {}
 
 
+def _keychain_credentials() -> dict:
+    """macOS only: read the Claude Code credential blob from the Keychain.
+
+    Runs ``security find-generic-password`` (read-only) for each candidate
+    service name and returns the parsed ``claudeAiOauth``-shaped dict, or an
+    empty dict on any platform other than macOS / any failure. The stored
+    value may be the full JSON blob or a bare token — both are handled. The
+    token is never printed or logged.
+    """
+    if sys.platform != "darwin":
+        return {}
+    for service in _MACOS_KEYCHAIN_SERVICES:
+        try:
+            out = subprocess.run(
+                ["security", "find-generic-password", "-s", service, "-w"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        secret = (out.stdout or "").strip()
+        if out.returncode != 0 or not secret:
+            continue
+        try:
+            data = json.loads(secret)
+        except json.JSONDecodeError:
+            # A bare token string — wrap it in the expected shape.
+            return {"accessToken": secret}
+        if isinstance(data, dict):
+            return data.get("claudeAiOauth") or data
+    return {}
+
+
 def read_token() -> str | None:
-    """Return the OAuth access token from ``~/.claude/.credentials.json``."""
+    """Return the OAuth access token.
+
+    Reads ``~/.claude/.credentials.json`` first (Linux, and macOS when Claude
+    Code uses a file); on macOS it falls back to the login Keychain.
+    """
     data = _safe_load_json(CREDS_PATH)
     oauth = data.get("claudeAiOauth") or {}
-    return oauth.get("accessToken") or data.get("accessToken")
+    token = oauth.get("accessToken") or data.get("accessToken")
+    if token:
+        return token
+    kc = _keychain_credentials()
+    return kc.get("accessToken")
 
 
 def read_oauth_credentials() -> dict:
