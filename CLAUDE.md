@@ -106,9 +106,13 @@ Runtime files (never committed):
    ``(ts, metric, util)`` triples. No email, no token, no account id.
    The cache is not encrypted and the user may share it when debugging.
 
-6. **New user-visible strings go through ``strings.py``.** Always add
-   both EN and FR keys. English is the default; a missing key falls back
-   to English with a stderr warning — fine for debugging, not OK to ship.
+6. **New user-visible strings go through ``strings.py``.** Add the key in
+   **every** language table (EN, FR, ES, DE, JA, PT — all must share the
+   same key set). English is the default; a missing key falls back to
+   English with a stderr warning — fine for debugging, not OK to ship.
+   Keep top-bar-visible strings (``session_5h``/``weekly_7d``/``sonnet_7d``
+   and the ``label_*`` segments) ASCII-safe — the GNOME top-bar font drops
+   many non-ASCII glyphs.
 
 7. **The account store holds several OAuth tokens — guard it like #2.**
    ``accounts/<id>.json`` files are the only place besides ``~/.claude``

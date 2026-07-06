@@ -10,11 +10,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-_FALLBACK = "1.0.0"
+_FALLBACK = "1.1.0"
 
 
 def current_version() -> str:
-    """Return the app version string (e.g. ``"1.0.0"``)."""
+    """Return the app version string (e.g. ``"1.1.0"``)."""
     try:
         v = (Path(__file__).resolve().parent / "VERSION").read_text().strip()
         return v or _FALLBACK

@@ -107,7 +107,8 @@ present inside virtualenvs.
   and on your own custom rate alerts.
 - ⬆️ **Built-in updates** — checks GitHub for a new release and updates in
   one click. → [Updates](#updates)
-- 🌍 **Bilingual** — English (default) and French.
+- 🌍 **Multilingual** — English (default), French, Spanish, German,
+  Japanese and Portuguese (BR).
 - 🛟 **Fails gracefully** — a missing token, an outage, or Anthropic's
   known `429` bug never crash it; stats stay on screen and it retries with
   backoff.
@@ -182,7 +183,7 @@ by hand (invalid values fall back to defaults instead of crashing):
 ```jsonc
 {
   "schema_version": 2,
-  "lang": "en",                        // "en" or "fr"
+  "lang": "en",                        // en · fr · es · de · ja · pt
   "poll_seconds": 60,                  // minimum 10
   "builtin_thresholds": [80, 95],      // notify at these % (0–100)
   "update_check_enabled": true,        // check GitHub for new releases
@@ -212,7 +213,8 @@ by hand (invalid values fall back to defaults instead of crashing):
 }
 ```
 
-`CLAUDE_USAGE_LANG=en|fr` overrides the file's `lang` (handy for testing).
+`CLAUDE_USAGE_LANG=en|fr|es|de|ja|pt` overrides the file's `lang` (handy
+for testing).
 
 ### Custom rate alerts
 
