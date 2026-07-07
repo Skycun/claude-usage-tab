@@ -34,6 +34,12 @@ VALID_METRICS = (
 VALID_CLAUDE_TOPBAR_METRICS = ("five_hour", "seven_day", "seven_day_sonnet")
 DEFAULT_CLAUDE_TOPBAR_METRICS = ("five_hour", "seven_day")
 
+# Sound played when the 5 h session crosses its 80% threshold (macOS only).
+# "classic" = default reminder chime, "kylian" = bundled meme sound + image,
+# "none" = silent. Consumed by the macOS menu-bar front-end only.
+VALID_SOUND_80 = ("classic", "kylian", "none")
+DEFAULT_SOUND_80 = "classic"
+
 # v2 introduced the ``topbar`` block. v1 files load fine — the new keys
 # default gracefully via ``.get(...)``.
 SCHEMA_VERSION = 2
@@ -86,6 +92,7 @@ class Settings:
     account_switch_enabled: bool = False
     # Check GitHub for a newer release (unauthenticated GET, nothing sent).
     update_check_enabled: bool = True
+    sound_80: str = DEFAULT_SOUND_80
     topbar: TopbarSettings = field(default_factory=TopbarSettings)
     alerts: tuple[AlertDef, ...] = field(default_factory=tuple)
 
@@ -98,6 +105,7 @@ DEFAULT_SETTINGS_JSON: dict[str, Any] = {
     "accounts_enabled": True,
     "account_switch_enabled": False,
     "update_check_enabled": True,
+    "sound_80": "classic",
     "topbar": {
         "show_claude": True,
         "claude_metrics": list(DEFAULT_CLAUDE_TOPBAR_METRICS),
@@ -315,6 +323,10 @@ def _from_raw(raw: dict) -> Settings:
             seen_ids.add(parsed.id)
             alerts.append(parsed)
 
+    sound_80 = raw.get("sound_80")
+    if sound_80 not in VALID_SOUND_80:
+        sound_80 = DEFAULT_SOUND_80
+
     return Settings(
         schema_version=_coerce_int(raw.get("schema_version"), SCHEMA_VERSION),
         lang=lang,
@@ -325,6 +337,7 @@ def _from_raw(raw: dict) -> Settings:
             raw.get("account_switch_enabled"), False
         ),
         update_check_enabled=_coerce_bool(raw.get("update_check_enabled"), True),
+        sound_80=sound_80,
         topbar=_validate_topbar(raw.get("topbar")),
         alerts=tuple(alerts),
     )
@@ -368,6 +381,7 @@ def settings_to_dict(s: Settings) -> dict[str, Any]:
         "accounts_enabled": s.accounts_enabled,
         "account_switch_enabled": s.account_switch_enabled,
         "update_check_enabled": s.update_check_enabled,
+        "sound_80": s.sound_80,
         "topbar": topbar_to_dict(s.topbar),
         "alerts": [alert_to_dict(a) for a in s.alerts],
     }

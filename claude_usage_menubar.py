@@ -36,6 +36,7 @@ from formatting import fmt_secs, format_local, format_remaining, progress_bar
 from settings import (
     SETTINGS_PATH,
     VALID_CLAUDE_TOPBAR_METRICS,
+    VALID_SOUND_80,
     Settings,
     load_settings,
     mtime as settings_mtime,
@@ -55,6 +56,7 @@ SETTINGS_URL = "https://claude.ai/settings/usage"
 INSTALL_DIR = Path(__file__).resolve().parent
 KYLIAN_SOUND = INSTALL_DIR / "assets" / "kylian.mp3"
 KYLIAN_IMAGE = INSTALL_DIR / "assets" / "kylian.jpg"
+CLASSIC_SOUND = Path("/System/Library/Sounds/Glass.aiff")
 BACKOFF_STAGES = (120, 300, 900, 1800, 3600)
 BOOT_COOLDOWN = timedelta(minutes=5)
 HISTORY_SNAPSHOT_EVERY = 5
@@ -428,10 +430,19 @@ class ClaudeUsageApp(rumps.App):
                         rem=format_remaining(reset),
                     ),
                 )
-                # kylian: son + image sur le franchissement des 80% de session (5 h)
+                # Son configurable sur le franchissement des 80% de session (5 h)
                 if metric == "five_hour" and threshold == 80:
-                    play_sound(KYLIAN_SOUND)
-                    open_path(str(KYLIAN_IMAGE))
+                    self._play_threshold_sound()
+
+    def _play_threshold_sound(self) -> None:
+        """Sound/flourish for the 80% session crossing, per ``sound_80``."""
+        mode = self.settings.sound_80
+        if mode == "kylian":
+            play_sound(KYLIAN_SOUND)
+            open_path(str(KYLIAN_IMAGE))
+        elif mode == "classic":
+            play_sound(CLASSIC_SOUND)
+        # "none": rien
 
     # -- menu rows -------------------------------------------------------
 
@@ -592,6 +603,17 @@ class ClaudeUsageApp(rumps.App):
         opts.add(self._check_item(t("dlg_accounts_enabled"), self.settings.accounts_enabled, lambda _s: self._toggle_setting("accounts_enabled")))
         opts.add(self._check_item(t("dlg_account_switch_enabled"), self.settings.account_switch_enabled, lambda _s: self._toggle_setting("account_switch_enabled")))
         opts.add(self._check_item(t("dlg_update_check_enabled"), self.settings.update_check_enabled, lambda _s: self._toggle_setting("update_check_enabled")))
+
+        sound = rumps.MenuItem(t("dlg_sound_80"))
+        for mode in VALID_SOUND_80:
+            sound.add(
+                self._check_item(
+                    t(f"dlg_sound_80_{mode}"),
+                    self.settings.sound_80 == mode,
+                    lambda _s, mo=mode: self._set_sound_80(mo),
+                )
+            )
+        opts.add(sound)
         return opts
 
     def _save_and_apply(self, new: Settings) -> None:
@@ -634,6 +656,9 @@ class ClaudeUsageApp(rumps.App):
 
     def _set_language(self, code: str) -> None:
         self._save_and_apply(dataclasses.replace(self.settings, lang=code))
+
+    def _set_sound_80(self, mode: str) -> None:
+        self._save_and_apply(dataclasses.replace(self.settings, sound_80=mode))
 
     # -- actions ---------------------------------------------------------
 
