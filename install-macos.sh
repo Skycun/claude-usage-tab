@@ -43,7 +43,7 @@ command -v python3 >/dev/null 2>&1 || die "python3 not found — install the Xco
 if [[ -z "$AUTOSTART" ]]; then
     if [[ -t 0 ]]; then
         read -r -p "$(printf '\033[1;34m==>\033[0m Start Claude Usage Tab automatically at login? [Y/n] ')" ans
-        case "${ans,,}" in n|no) AUTOSTART=0 ;; *) AUTOSTART=1 ;; esac
+        case "$ans" in [nN]|[nN][oO]) AUTOSTART=0 ;; *) AUTOSTART=1 ;; esac
     else
         AUTOSTART=1
         say "No TTY — defaulting to autostart enabled (use --no-autostart to disable)."
