@@ -53,6 +53,8 @@ from topbar import compose_label
 
 SETTINGS_URL = "https://claude.ai/settings/usage"
 INSTALL_DIR = Path(__file__).resolve().parent
+KYLIAN_SOUND = INSTALL_DIR / "assets" / "kylian.mp3"
+KYLIAN_IMAGE = INSTALL_DIR / "assets" / "kylian.jpg"
 BACKOFF_STAGES = (120, 300, 900, 1800, 3600)
 BOOT_COOLDOWN = timedelta(minutes=5)
 HISTORY_SNAPSHOT_EVERY = 5
@@ -93,6 +95,16 @@ def open_path(target: str) -> None:
     """Open a URL or file with the default handler (``open``)."""
     try:
         subprocess.Popen(["open", target], start_new_session=True)
+    except OSError:
+        pass
+
+
+def play_sound(path: Path) -> None:
+    """Play an audio file via macOS ``afplay`` (detached, best-effort)."""
+    if not path.exists():
+        return
+    try:
+        subprocess.Popen(["afplay", str(path)], start_new_session=True)
     except OSError:
         pass
 
@@ -416,6 +428,10 @@ class ClaudeUsageApp(rumps.App):
                         rem=format_remaining(reset),
                     ),
                 )
+                # kylian: son + image sur le franchissement des 80% de session (5 h)
+                if metric == "five_hour" and threshold == 80:
+                    play_sound(KYLIAN_SOUND)
+                    open_path(str(KYLIAN_IMAGE))
 
     # -- menu rows -------------------------------------------------------
 
