@@ -38,7 +38,7 @@ DEFAULT_CLAUDE_TOPBAR_METRICS = ("five_hour", "seven_day")
 # "classic" = default reminder chime, "kylian" = bundled meme sound + image,
 # "none" = silent. Consumed by the macOS menu-bar front-end only.
 VALID_SOUND_80 = ("classic", "kylian", "none")
-DEFAULT_SOUND_80 = "classic"
+DEFAULT_SOUND_80 = "kylian"
 
 # v2 introduced the ``topbar`` block. v1 files load fine — the new keys
 # default gracefully via ``.get(...)``.
@@ -105,7 +105,7 @@ DEFAULT_SETTINGS_JSON: dict[str, Any] = {
     "accounts_enabled": True,
     "account_switch_enabled": False,
     "update_check_enabled": True,
-    "sound_80": "classic",
+    "sound_80": "kylian",
     "topbar": {
         "show_claude": True,
         "claude_metrics": list(DEFAULT_CLAUDE_TOPBAR_METRICS),
