@@ -24,6 +24,7 @@ claude_usage_indicator.py    # Linux: Indicator class + main() — the GTK UI
 claude_usage_menubar.py      # macOS: rumps menu-bar app (same engine)
 topbar.py                    # top-bar label composition (settings-driven)
 formatting.py                # shared pure render helpers (durations, bars, icon state)
+sound.py                     # shared 80%-session flourish engine (audio + image, both platforms)
 settings_dialog.py           # GTK settings window
 strings.py                   # i18n (EN default/FR) — STRINGS dict + t()
 settings.py                  # ~/.config/claude-usage-indicator/settings.json
@@ -36,6 +37,7 @@ VERSION                      # the version string (e.g. 1.0.0)
 install.sh / update.sh / uninstall.sh          # Linux install/self-update/uninstall
 install-macos.sh / update-macos.sh / uninstall-macos.sh  # macOS (venv + LaunchAgent)
 icons/                       # default, gray, full PNGs (bundled)
+assets/                      # kylian sound/image + any custom-mode defaults (bundled)
 docs/macos.md                # macOS build notes + caveats
 test_claude_usage.sh         # one-shot curl to the OAuth endpoint
 ```
@@ -43,7 +45,7 @@ test_claude_usage.sh         # one-shot curl to the OAuth endpoint
 Two front-ends, one engine: `claude_usage_indicator.py` (GTK) and
 `claude_usage_menubar.py` (rumps) both drive the same UI-free modules
 (`api`, `settings`, `alerts`, `accounts`, `updates`, `topbar`, `strings`,
-`formatting`). Keep all logic in the shared modules — a fix should land once
+`formatting`, `sound`). Keep all logic in the shared modules — a fix should land once
 and benefit both platforms. The macOS build uses a pip venv (no PyGObject
 constraint there); Linux stays system-Python.
 
@@ -51,7 +53,8 @@ No package, no venv, no build. Sibling modules importing each other
 directly — **not** a package (no ``__init__.py``). Dependencies are
 shallow: ``strings``, ``settings``, ``api`` and ``version`` are leaves
 (``api``/``updates`` need only ``requests``); ``alerts`` depends on
-``settings``; ``accounts`` depends on ``api`` + ``settings``; ``updates``
+``settings``; ``sound`` depends on ``settings``; ``accounts`` depends on
+``api`` + ``settings``; ``updates``
 depends on ``settings`` + ``version``; ``topbar`` depends on ``settings`` +
 ``strings``; ``settings_dialog`` depends on ``settings`` + ``topbar`` +
 ``strings`` (and GTK); the main script imports the rest.

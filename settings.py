@@ -34,15 +34,20 @@ VALID_METRICS = (
 VALID_CLAUDE_TOPBAR_METRICS = ("five_hour", "seven_day", "seven_day_sonnet")
 DEFAULT_CLAUDE_TOPBAR_METRICS = ("five_hour", "seven_day")
 
-# Sound played when the 5 h session crosses its 80% threshold (macOS only).
-# "classic" = default reminder chime, "kylian" = bundled meme sound + image,
-# "none" = silent. Consumed by the macOS menu-bar front-end only.
-VALID_SOUND_80 = ("classic", "kylian", "none")
-DEFAULT_SOUND_80 = "kylian"
+# Sound/flourish played when the 5 h session crosses its 80% threshold, on
+# BOTH front-ends (macOS menu-bar + Linux indicator). Off by default. When
+# enabled, ``mode`` selects the effect:
+#   "kylian"  = bundled meme sound + image
+#   "classic" = the platform's default reminder chime
+#   "custom"  = user-picked sound and/or image (paths in SoundSettings)
+# More built-in modes can be appended to VALID_SOUND_MODES over time.
+VALID_SOUND_MODES = ("kylian", "classic", "custom")
+DEFAULT_SOUND_MODE = "kylian"
 
-# v2 introduced the ``topbar`` block. v1 files load fine — the new keys
-# default gracefully via ``.get(...)``.
-SCHEMA_VERSION = 2
+# v2 introduced the ``topbar`` block; v3 introduced the ``sound`` block (and
+# retired the flat ``sound_80`` string, migrated on load). Older files load
+# fine — new keys default gracefully via ``.get(...)``.
+SCHEMA_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -80,6 +85,24 @@ class TopbarSettings:
 
 
 @dataclass(frozen=True)
+class SoundSettings:
+    """The 80%-session audible/visual flourish, shared by both front-ends.
+
+    ``enabled`` gates everything (off by default). ``mode`` picks the effect
+    when enabled (see :data:`VALID_SOUND_MODES`). ``custom_audio`` and
+    ``custom_image`` are filesystem paths used only by ``mode == "custom"``;
+    each is optional (empty = nothing for that slot). Paths are stored
+    verbatim and existence-checked at play time, so a stale path degrades to
+    silence rather than crashing the daemon.
+    """
+
+    enabled: bool = False
+    mode: str = DEFAULT_SOUND_MODE
+    custom_audio: str = ""
+    custom_image: str = ""
+
+
+@dataclass(frozen=True)
 class Settings:
     schema_version: int = SCHEMA_VERSION
     lang: str = "en"
@@ -92,7 +115,7 @@ class Settings:
     account_switch_enabled: bool = False
     # Check GitHub for a newer release (unauthenticated GET, nothing sent).
     update_check_enabled: bool = True
-    sound_80: str = DEFAULT_SOUND_80
+    sound: SoundSettings = field(default_factory=SoundSettings)
     topbar: TopbarSettings = field(default_factory=TopbarSettings)
     alerts: tuple[AlertDef, ...] = field(default_factory=tuple)
 
@@ -105,7 +128,12 @@ DEFAULT_SETTINGS_JSON: dict[str, Any] = {
     "accounts_enabled": True,
     "account_switch_enabled": False,
     "update_check_enabled": True,
-    "sound_80": "kylian",
+    "sound": {
+        "enabled": False,
+        "mode": "kylian",
+        "custom_audio": "",
+        "custom_image": "",
+    },
     "topbar": {
         "show_claude": True,
         "claude_metrics": list(DEFAULT_CLAUDE_TOPBAR_METRICS),
@@ -187,6 +215,11 @@ def _coerce_bool(v: Any, default: bool) -> bool:
     return v if isinstance(v, bool) else default
 
 
+def _coerce_path(v: Any) -> str:
+    """A custom media path: a plain string, or '' for anything else."""
+    return v if isinstance(v, str) else ""
+
+
 # A tiny allowlist of non-ASCII separators that render reliably in the GNOME
 # top-bar font. The blanket "ASCII only" rule exists to avoid missing glyphs
 # (we hit this with the calendar emoji 🗓); these Latin-1/General-Punctuation
@@ -251,6 +284,35 @@ def _validate_topbar(raw: Any) -> TopbarSettings:
         compact=_coerce_bool(raw.get("compact"), False),
         metric_separator=sanitize_separator(raw.get("metric_separator"), " . "),
         percent_decimals=decimals,
+    )
+
+
+def _sound_from_legacy(legacy: Any) -> SoundSettings:
+    """Map the retired flat ``sound_80`` string onto the new block.
+
+    Old files carried "classic"/"kylian"/"none". Preserve the user's intent
+    so nobody silently loses their choice on upgrade: "none" (or absent) →
+    disabled; "kylian"/"classic" → enabled on that mode.
+    """
+    if legacy == "kylian":
+        return SoundSettings(enabled=True, mode="kylian")
+    if legacy == "classic":
+        return SoundSettings(enabled=True, mode="classic")
+    return SoundSettings()
+
+
+def _validate_sound(raw: Any, legacy: Any = None) -> SoundSettings:
+    """Validate the ``sound`` block, else migrate the legacy ``sound_80``."""
+    if not isinstance(raw, dict):
+        return _sound_from_legacy(legacy)
+    mode = raw.get("mode")
+    if mode not in VALID_SOUND_MODES:
+        mode = DEFAULT_SOUND_MODE
+    return SoundSettings(
+        enabled=_coerce_bool(raw.get("enabled"), False),
+        mode=mode,
+        custom_audio=_coerce_path(raw.get("custom_audio")),
+        custom_image=_coerce_path(raw.get("custom_image")),
     )
 
 
@@ -323,9 +385,7 @@ def _from_raw(raw: dict) -> Settings:
             seen_ids.add(parsed.id)
             alerts.append(parsed)
 
-    sound_80 = raw.get("sound_80")
-    if sound_80 not in VALID_SOUND_80:
-        sound_80 = DEFAULT_SOUND_80
+    sound = _validate_sound(raw.get("sound"), raw.get("sound_80"))
 
     return Settings(
         schema_version=_coerce_int(raw.get("schema_version"), SCHEMA_VERSION),
@@ -337,7 +397,7 @@ def _from_raw(raw: dict) -> Settings:
             raw.get("account_switch_enabled"), False
         ),
         update_check_enabled=_coerce_bool(raw.get("update_check_enabled"), True),
-        sound_80=sound_80,
+        sound=sound,
         topbar=_validate_topbar(raw.get("topbar")),
         alerts=tuple(alerts),
     )
@@ -355,6 +415,15 @@ def alert_to_dict(a: AlertDef) -> dict[str, Any]:
         "window_hours": a.window_hours,
         "cooldown_hours": a.cooldown_hours,
         "label": a.label,
+    }
+
+
+def sound_to_dict(s: SoundSettings) -> dict[str, Any]:
+    return {
+        "enabled": s.enabled,
+        "mode": s.mode,
+        "custom_audio": s.custom_audio,
+        "custom_image": s.custom_image,
     }
 
 
@@ -381,7 +450,7 @@ def settings_to_dict(s: Settings) -> dict[str, Any]:
         "accounts_enabled": s.accounts_enabled,
         "account_switch_enabled": s.account_switch_enabled,
         "update_check_enabled": s.update_check_enabled,
-        "sound_80": s.sound_80,
+        "sound": sound_to_dict(s.sound),
         "topbar": topbar_to_dict(s.topbar),
         "alerts": [alert_to_dict(a) for a in s.alerts],
     }

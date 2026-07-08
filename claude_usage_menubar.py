@@ -29,6 +29,7 @@ from pathlib import Path
 import rumps
 
 import accounts
+import sound
 import updates
 from alerts import History, evaluate_alerts
 from api import fetch_usage, parse_iso, read_account, read_token
@@ -36,7 +37,7 @@ from formatting import fmt_secs, format_local, format_remaining, progress_bar
 from settings import (
     SETTINGS_PATH,
     VALID_CLAUDE_TOPBAR_METRICS,
-    VALID_SOUND_80,
+    VALID_SOUND_MODES,
     Settings,
     load_settings,
     mtime as settings_mtime,
@@ -54,9 +55,7 @@ from topbar import compose_label
 
 SETTINGS_URL = "https://claude.ai/settings/usage"
 INSTALL_DIR = Path(__file__).resolve().parent
-KYLIAN_SOUND = INSTALL_DIR / "assets" / "kylian.mp3"
-KYLIAN_IMAGE = INSTALL_DIR / "assets" / "kylian.jpg"
-CLASSIC_SOUND = Path("/System/Library/Sounds/Glass.aiff")
+ASSETS_DIR = INSTALL_DIR / "assets"
 BACKOFF_STAGES = (120, 300, 900, 1800, 3600)
 BOOT_COOLDOWN = timedelta(minutes=5)
 HISTORY_SNAPSHOT_EVERY = 5
@@ -101,14 +100,33 @@ def open_path(target: str) -> None:
         pass
 
 
-def play_sound(path: Path) -> None:
-    """Play an audio file via macOS ``afplay`` (detached, best-effort)."""
-    if not path.exists():
-        return
+_AUDIO_TYPES = '{"mp3","m4a","aiff","aif","wav","caf","aac"}'
+_IMAGE_TYPES = '{"png","jpg","jpeg","gif","heic","bmp","tiff"}'
+
+
+def choose_media_file(kind: str) -> str | None:
+    """Native macOS file picker (osascript). Returns a POSIX path or None.
+
+    ``kind`` is "audio" or "image". A user cancel (non-zero exit) yields None.
+    """
+    types = _AUDIO_TYPES if kind == "audio" else _IMAGE_TYPES
+    script = (
+        "POSIX path of (choose file with prompt "
+        '"Claude Usage" of type ' + types + ")"
+    )
     try:
-        subprocess.Popen(["afplay", str(path)], start_new_session=True)
-    except OSError:
-        pass
+        out = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None  # cancelled
+    path = out.stdout.strip()
+    return path or None
 
 
 def spawn_claude_login() -> bool:
@@ -430,19 +448,9 @@ class ClaudeUsageApp(rumps.App):
                         rem=format_remaining(reset),
                     ),
                 )
-                # Son configurable sur le franchissement des 80% de session (5 h)
+                # Configurable flourish on the 80% session (5 h) crossing.
                 if metric == "five_hour" and threshold == 80:
-                    self._play_threshold_sound()
-
-    def _play_threshold_sound(self) -> None:
-        """Sound/flourish for the 80% session crossing, per ``sound_80``."""
-        mode = self.settings.sound_80
-        if mode == "kylian":
-            play_sound(KYLIAN_SOUND)
-            open_path(str(KYLIAN_IMAGE))
-        elif mode == "classic":
-            play_sound(CLASSIC_SOUND)
-        # "none": rien
+                    sound.play_for(self.settings.sound, ASSETS_DIR)
 
     # -- menu rows -------------------------------------------------------
 
@@ -604,16 +612,45 @@ class ClaudeUsageApp(rumps.App):
         opts.add(self._check_item(t("dlg_account_switch_enabled"), self.settings.account_switch_enabled, lambda _s: self._toggle_setting("account_switch_enabled")))
         opts.add(self._check_item(t("dlg_update_check_enabled"), self.settings.update_check_enabled, lambda _s: self._toggle_setting("update_check_enabled")))
 
-        sound = rumps.MenuItem(t("dlg_sound_80"))
-        for mode in VALID_SOUND_80:
-            sound.add(
+        snd = self.settings.sound
+        sound_menu = rumps.MenuItem(t("dlg_sound_menu"))
+        sound_menu.add(
+            self._check_item(
+                t("dlg_sound_enabled"),
+                snd.enabled,
+                lambda _s: self._toggle_sound_enabled(),
+            )
+        )
+        sound_menu.add(rumps.separator)
+        mode_menu = rumps.MenuItem(t("dlg_sound_mode"))
+        for mode in VALID_SOUND_MODES:
+            mode_menu.add(
                 self._check_item(
-                    t(f"dlg_sound_80_{mode}"),
-                    self.settings.sound_80 == mode,
-                    lambda _s, mo=mode: self._set_sound_80(mo),
+                    t(f"dlg_sound_mode_{mode}"),
+                    snd.mode == mode,
+                    lambda _s, mo=mode: self._set_sound_mode(mo),
                 )
             )
-        opts.add(sound)
+        sound_menu.add(mode_menu)
+        sound_menu.add(
+            rumps.MenuItem(
+                t("dlg_sound_choose_audio"),
+                callback=lambda _s: self._choose_custom("audio"),
+            )
+        )
+        sound_menu.add(
+            rumps.MenuItem(
+                t("dlg_sound_choose_image"),
+                callback=lambda _s: self._choose_custom("image"),
+            )
+        )
+        sound_menu.add(rumps.separator)
+        sound_menu.add(
+            rumps.MenuItem(
+                t("dlg_sound_test"), callback=lambda _s: self._test_sound()
+            )
+        )
+        opts.add(sound_menu)
         return opts
 
     def _save_and_apply(self, new: Settings) -> None:
@@ -657,8 +694,27 @@ class ClaudeUsageApp(rumps.App):
     def _set_language(self, code: str) -> None:
         self._save_and_apply(dataclasses.replace(self.settings, lang=code))
 
-    def _set_sound_80(self, mode: str) -> None:
-        self._save_and_apply(dataclasses.replace(self.settings, sound_80=mode))
+    def _toggle_sound_enabled(self) -> None:
+        snd = dataclasses.replace(
+            self.settings.sound, enabled=not self.settings.sound.enabled
+        )
+        self._save_and_apply(dataclasses.replace(self.settings, sound=snd))
+
+    def _set_sound_mode(self, mode: str) -> None:
+        snd = dataclasses.replace(self.settings.sound, mode=mode)
+        self._save_and_apply(dataclasses.replace(self.settings, sound=snd))
+
+    def _choose_custom(self, kind: str) -> None:
+        """Pick a custom sound/image; picking one also selects custom mode."""
+        path = choose_media_file(kind)
+        if not path:
+            return
+        field = "custom_audio" if kind == "audio" else "custom_image"
+        snd = dataclasses.replace(self.settings.sound, mode="custom", **{field: path})
+        self._save_and_apply(dataclasses.replace(self.settings, sound=snd))
+
+    def _test_sound(self) -> None:
+        sound.preview(self.settings.sound, ASSETS_DIR)
 
     # -- actions ---------------------------------------------------------
 

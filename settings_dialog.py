@@ -21,8 +21,10 @@ import topbar
 from settings import (
     SCHEMA_VERSION,
     Settings,
+    SoundSettings,
     TopbarSettings,
     VALID_CLAUDE_TOPBAR_METRICS,
+    VALID_SOUND_MODES,
     sanitize_separator,
     save_settings,
 )
@@ -49,6 +51,7 @@ class SettingsDialog(Gtk.Window):
         on_edit_json: Callable[[], None],
         on_update: Callable[[], None] | None = None,
         on_uninstall: Callable[[bool], None] | None = None,
+        on_test_sound: Callable[[SoundSettings], None] | None = None,
         update_info: object | None = None,
     ) -> None:
         super().__init__(title=t("dlg_title"))
@@ -58,6 +61,7 @@ class SettingsDialog(Gtk.Window):
         self._on_edit_json = on_edit_json
         self._on_update = on_update
         self._on_uninstall = on_uninstall
+        self._on_test_sound = on_test_sound
         # Duck-typed: an updates.UpdateInfo (current / latest / available).
         self._update_info = update_info
 
@@ -79,6 +83,9 @@ class SettingsDialog(Gtk.Window):
         )
         notebook.append_page(
             self._build_accounts_tab(), Gtk.Label(label=t("dlg_tab_accounts"))
+        )
+        notebook.append_page(
+            self._build_sound_tab(), Gtk.Label(label=t("dlg_tab_sound"))
         )
         notebook.append_page(
             self._build_maintenance_tab(),
@@ -195,6 +202,91 @@ class SettingsDialog(Gtk.Window):
             self._dim(t("dlg_account_switch_hint")), False, False, 0
         )
         return box
+
+    # --------------------------------------------------------------- tab: sound
+
+    def _build_sound_tab(self) -> Gtk.Widget:
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box.set_border_width(12)
+        snd = self.settings.sound
+
+        self.chk_sound_enabled = self._check(t("dlg_sound_enabled"), snd.enabled)
+        box.pack_start(self.chk_sound_enabled, False, False, 0)
+
+        box.pack_start(Gtk.Separator(), False, False, 4)
+
+        box.pack_start(self._label(t("dlg_sound_mode")), False, False, 0)
+        modes = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        modes.set_margin_start(22)
+        self.sound_mode_radios: dict[str, Gtk.RadioButton] = {}
+        group: Gtk.RadioButton | None = None
+        for mode in VALID_SOUND_MODES:
+            rb = Gtk.RadioButton.new_with_label_from_widget(
+                group, t(f"dlg_sound_mode_{mode}")
+            )
+            if group is None:
+                group = rb
+            rb.set_active(snd.mode == mode)
+            self.sound_mode_radios[mode] = rb
+            modes.pack_start(rb, False, False, 0)
+        box.pack_start(modes, False, False, 0)
+
+        box.pack_start(Gtk.Separator(), False, False, 4)
+
+        grid = Gtk.Grid(column_spacing=12, row_spacing=10)
+        grid.attach(self._label(t("dlg_sound_custom_audio")), 0, 0, 1, 1)
+        self.fc_audio = self._file_chooser(
+            t("dlg_sound_choose_audio"), snd.custom_audio, self._audio_filter()
+        )
+        grid.attach(self.fc_audio, 1, 0, 1, 1)
+        grid.attach(self._label(t("dlg_sound_custom_image")), 0, 1, 1, 1)
+        self.fc_image = self._file_chooser(
+            t("dlg_sound_choose_image"), snd.custom_image, self._image_filter()
+        )
+        grid.attach(self.fc_image, 1, 1, 1, 1)
+        box.pack_start(grid, False, False, 0)
+
+        box.pack_start(Gtk.Separator(), False, False, 6)
+
+        btn_test = Gtk.Button(label=t("dlg_sound_test"))
+        btn_test.set_halign(Gtk.Align.START)
+        btn_test.connect("clicked", lambda _b: self._test_sound())
+        box.pack_start(btn_test, False, False, 0)
+        return box
+
+    @staticmethod
+    def _file_chooser(
+        title: str, current: str, file_filter: Gtk.FileFilter
+    ) -> Gtk.FileChooserButton:
+        fc = Gtk.FileChooserButton(title=title, action=Gtk.FileChooserAction.OPEN)
+        fc.add_filter(file_filter)
+        all_files = Gtk.FileFilter()
+        all_files.set_name("*")
+        all_files.add_pattern("*")
+        fc.add_filter(all_files)
+        if current:
+            fc.set_filename(current)
+        return fc
+
+    @staticmethod
+    def _audio_filter() -> Gtk.FileFilter:
+        flt = Gtk.FileFilter()
+        flt.set_name(t("dlg_sound_custom_audio"))
+        for pat in ("*.mp3", "*.wav", "*.ogg", "*.oga", "*.flac", "*.m4a", "*.aac"):
+            flt.add_pattern(pat)
+        return flt
+
+    @staticmethod
+    def _image_filter() -> Gtk.FileFilter:
+        flt = Gtk.FileFilter()
+        flt.set_name(t("dlg_sound_custom_image"))
+        for pat in ("*.png", "*.jpg", "*.jpeg", "*.gif", "*.bmp", "*.webp"):
+            flt.add_pattern(pat)
+        return flt
+
+    def _test_sound(self) -> None:
+        if self._on_test_sound is not None:
+            self._on_test_sound(self._collect_sound())
 
     # ------------------------------------------------------------ tab: maintenance
 
@@ -389,6 +481,18 @@ class SettingsDialog(Gtk.Window):
             percent_decimals=int(self.spin_decimals.get_value()),
         )
 
+    def _collect_sound(self) -> SoundSettings:
+        mode = next(
+            (m for m, rb in self.sound_mode_radios.items() if rb.get_active()),
+            self.settings.sound.mode,
+        )
+        return SoundSettings(
+            enabled=self.chk_sound_enabled.get_active(),
+            mode=mode,
+            custom_audio=self.fc_audio.get_filename() or "",
+            custom_image=self.fc_image.get_filename() or "",
+        )
+
     def _collect_thresholds(self) -> tuple[int, ...]:
         out: list[int] = []
         for part in self.ent_thresholds.get_text().split(","):
@@ -415,6 +519,7 @@ class SettingsDialog(Gtk.Window):
             update_check_enabled=self.chk_update_check.get_active(),
             accounts_enabled=self.chk_accounts_enabled.get_active(),
             account_switch_enabled=self.chk_account_switch.get_active(),
+            sound=self._collect_sound(),
             topbar=self._collect_topbar(),
         )
 

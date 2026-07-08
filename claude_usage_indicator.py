@@ -53,9 +53,11 @@ from api import (  # noqa: E402
     read_account,
     read_token,
 )
+import sound  # noqa: E402
 from settings import (  # noqa: E402
     SETTINGS_PATH,
     Settings,
+    SoundSettings,
     load_settings,
     mtime as settings_mtime,
 )
@@ -74,6 +76,8 @@ SETTINGS_URL = "https://claude.ai/settings/usage"
 APP_ID = "claude-usage-indicator"
 # Where this checkout lives — used to run install/update/uninstall scripts.
 INSTALL_DIR = Path(__file__).resolve().parent
+# Bundled flourish assets (kylian sound/image), shared with the macOS build.
+ASSETS_DIR = INSTALL_DIR / "assets"
 # First update check runs shortly after launch (let the tray render first),
 # then re-checks on this cadence. The GLib timer and updates.check()'s own
 # cache-staleness threshold share one constant so they can't drift apart.
@@ -368,6 +372,7 @@ class Indicator:
             on_edit_json=self._open_settings_file,
             on_update=self._do_update,
             on_uninstall=self._do_uninstall,
+            on_test_sound=self._test_sound,
             update_info=self.update_info,
         )
         self._settings_window = dlg
@@ -381,6 +386,10 @@ class Indicator:
 
     def _on_settings_closed(self) -> None:
         self._settings_window = None
+
+    def _test_sound(self, snd: SoundSettings) -> None:
+        """Preview the (possibly unsaved) sound settings from the dialog."""
+        sound.preview(snd, ASSETS_DIR)
 
     # ------------------------------------------------------------- updates
 
@@ -1048,6 +1057,9 @@ class Indicator:
                     ),
                     urgent=threshold >= 95,
                 )
+                # Configurable flourish on the 80% session (5 h) crossing.
+                if metric == "five_hour" and threshold == 80:
+                    sound.play_for(self.settings.sound, ASSETS_DIR)
 
 
 def main() -> int:
