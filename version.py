@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-_FALLBACK = "1.2.0"
+_FALLBACK = "1.3.0"
 
 
 def current_version() -> str:
