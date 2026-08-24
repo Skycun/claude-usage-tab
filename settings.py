@@ -44,10 +44,17 @@ DEFAULT_CLAUDE_TOPBAR_METRICS = ("five_hour", "seven_day")
 VALID_SOUND_MODES = ("kylian", "classic", "custom")
 DEFAULT_SOUND_MODE = "kylian"
 
+# Daily API-cost readout in the dropdown, computed by shelling out to
+# ``ccusage`` (see ``costs.py``). Off by default: it needs a third-party tool
+# and spawns a subprocess, neither of which we impose on anyone.
+DEFAULT_COST_REFRESH_MINUTES = 15
+MIN_COST_REFRESH_MINUTES = 1
+
 # v2 introduced the ``topbar`` block; v3 introduced the ``sound`` block (and
-# retired the flat ``sound_80`` string, migrated on load). Older files load
-# fine — new keys default gracefully via ``.get(...)``.
-SCHEMA_VERSION = 3
+# retired the flat ``sound_80`` string, migrated on load); v4 introduced the
+# ``cost`` block. Older files load fine — new keys default gracefully via
+# ``.get(...)``.
+SCHEMA_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -103,6 +110,22 @@ class SoundSettings:
 
 
 @dataclass(frozen=True)
+class CostSettings:
+    """The ccusage-backed API cost readout (dropdown only, opt-in).
+
+    ``command`` overrides runner auto-detection (``ccusage`` → ``bunx`` →
+    ``npx``) when set — a shell-style string, split with ``shlex``, for
+    pinned versions or wrapper scripts. ``refresh_minutes`` is deliberately
+    coarse: a run walks the whole ``~/.claude/projects`` transcript tree, so
+    it must never ride the 2-minute usage poll.
+    """
+
+    enabled: bool = False
+    command: str = ""
+    refresh_minutes: int = DEFAULT_COST_REFRESH_MINUTES
+
+
+@dataclass(frozen=True)
 class Settings:
     schema_version: int = SCHEMA_VERSION
     lang: str = "en"
@@ -116,6 +139,7 @@ class Settings:
     # Check GitHub for a newer release (unauthenticated GET, nothing sent).
     update_check_enabled: bool = True
     sound: SoundSettings = field(default_factory=SoundSettings)
+    cost: CostSettings = field(default_factory=CostSettings)
     topbar: TopbarSettings = field(default_factory=TopbarSettings)
     alerts: tuple[AlertDef, ...] = field(default_factory=tuple)
 
@@ -133,6 +157,11 @@ DEFAULT_SETTINGS_JSON: dict[str, Any] = {
         "mode": "kylian",
         "custom_audio": "",
         "custom_image": "",
+    },
+    "cost": {
+        "enabled": False,
+        "command": "",
+        "refresh_minutes": DEFAULT_COST_REFRESH_MINUTES,
     },
     "topbar": {
         "show_claude": True,
@@ -316,6 +345,22 @@ def _validate_sound(raw: Any, legacy: Any = None) -> SoundSettings:
     )
 
 
+def _validate_cost(raw: Any) -> CostSettings:
+    """Validate the ``cost`` block; anything odd falls back to the default."""
+    if not isinstance(raw, dict):
+        return CostSettings()
+    command = raw.get("command")
+    return CostSettings(
+        enabled=_coerce_bool(raw.get("enabled"), False),
+        command=command if isinstance(command, str) else "",
+        refresh_minutes=_coerce_int(
+            raw.get("refresh_minutes"),
+            DEFAULT_COST_REFRESH_MINUTES,
+            minimum=MIN_COST_REFRESH_MINUTES,
+        ),
+    )
+
+
 def _validate_alert(raw: dict, index: int) -> AlertDef | None:
     if not isinstance(raw, dict):
         print(f"settings: alerts[{index}] must be an object", file=sys.stderr)
@@ -398,6 +443,7 @@ def _from_raw(raw: dict) -> Settings:
         ),
         update_check_enabled=_coerce_bool(raw.get("update_check_enabled"), True),
         sound=sound,
+        cost=_validate_cost(raw.get("cost")),
         topbar=_validate_topbar(raw.get("topbar")),
         alerts=tuple(alerts),
     )
@@ -427,6 +473,14 @@ def sound_to_dict(s: SoundSettings) -> dict[str, Any]:
     }
 
 
+def cost_to_dict(c: CostSettings) -> dict[str, Any]:
+    return {
+        "enabled": c.enabled,
+        "command": c.command,
+        "refresh_minutes": c.refresh_minutes,
+    }
+
+
 def topbar_to_dict(tb: TopbarSettings) -> dict[str, Any]:
     return {
         "show_claude": tb.show_claude,
@@ -451,6 +505,7 @@ def settings_to_dict(s: Settings) -> dict[str, Any]:
         "account_switch_enabled": s.account_switch_enabled,
         "update_check_enabled": s.update_check_enabled,
         "sound": sound_to_dict(s.sound),
+        "cost": cost_to_dict(s.cost),
         "topbar": topbar_to_dict(s.topbar),
         "alerts": [alert_to_dict(a) for a in s.alerts],
     }

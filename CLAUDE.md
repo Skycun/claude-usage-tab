@@ -32,6 +32,7 @@ api.py                       # OAuth token (+ macOS Keychain fallback) + usage f
 accounts.py                  # multi-account store + capture + switch + refresh
 alerts.py                    # history (~/.cache/.../history.jsonl) + engine
 updates.py                   # GitHub releases/latest check (throttled + cached)
+costs.py                     # daily API cost via ccusage (opt-in, throttled + cached)
 version.py                   # reads the VERSION file (single source of truth)
 VERSION                      # the version string (e.g. 1.0.0)
 install.sh / update.sh / uninstall.sh          # Linux install/self-update/uninstall
@@ -44,8 +45,8 @@ test_claude_usage.sh         # one-shot curl to the OAuth endpoint
 
 Two front-ends, one engine: `claude_usage_indicator.py` (GTK) and
 `claude_usage_menubar.py` (rumps) both drive the same UI-free modules
-(`api`, `settings`, `alerts`, `accounts`, `updates`, `topbar`, `strings`,
-`formatting`, `sound`). Keep all logic in the shared modules — a fix should land once
+(`api`, `settings`, `alerts`, `accounts`, `updates`, `costs`, `topbar`,
+`strings`, `formatting`, `sound`). Keep all logic in the shared modules — a fix should land once
 and benefit both platforms. The macOS build uses a pip venv (no PyGObject
 constraint there); Linux stays system-Python.
 
@@ -53,11 +54,12 @@ No package, no venv, no build. Sibling modules importing each other
 directly — **not** a package (no ``__init__.py``). Dependencies are
 shallow: ``strings``, ``settings``, ``api`` and ``version`` are leaves
 (``api``/``updates`` need only ``requests``); ``alerts`` depends on
-``settings``; ``sound`` depends on ``settings``; ``accounts`` depends on
+``settings``; ``sound`` depends on ``settings``; ``costs`` depends on
+``settings``; ``accounts`` depends on
 ``api`` + ``settings``; ``updates``
 depends on ``settings`` + ``version``; ``topbar`` depends on ``settings`` +
 ``strings``; ``settings_dialog`` depends on ``settings`` + ``topbar`` +
-``strings`` (and GTK); the main script imports the rest.
+``costs`` + ``strings`` (and GTK); the main script imports the rest.
 
 Update flow: the daemon checks ``github.com/<repo>/releases/latest`` a few
 seconds after launch and every 6 h (``updates.check`` throttles the actual
@@ -67,6 +69,32 @@ a footer line in Settings ▸ Maintenance; clicking runs ``update.sh`` in a
 terminal (``git pull --ff-only`` → ``install.sh``, autostart preserved).
 Gated by ``update_check_enabled``. The check must stay **fail-open** — a
 network error degrades to "no update", never a crash or a red warning.
+
+API cost (``costs.py``): three gates before anything is shown —
+``cost.enabled``, a platform whose front-end path has actually been
+exercised (``MACOS_READY`` is **False**: the macOS row/toggle stay hidden
+until the rumps handoff is run on a real Mac), and a runner that exists on
+this machine. All three live in ``costs.is_available``; no runner means the
+row is **hidden**, not filled with an error — the settings dialog is where
+that gets explained, when you tick the box. It shells out to `ccusage
+<https://github.com/ryoppippi/ccusage>`_, which prices the local
+``~/.claude/projects/**/*.jsonl`` transcripts, and shows today / rolling 7 d
+/ current month in a dropdown submenu. **Opt-in** (``cost.enabled``, off by
+default) and dropdown-only — never in the top bar. The runner is
+auto-detected (``ccusage`` → ``bunx`` → ``npx`` → ``pnpm dlx``, PATH plus
+the usual per-user Node dirs, because the daemon starts with a stripped
+PATH); ``cost.command`` overrides it. When prepending the runner's own
+directory to the child's PATH, use the path **as found** — never
+``resolve()`` it: ``npx`` and corepack's ``pnpm`` are symlinks into
+``lib/node_modules/…``, and resolving hands the child a directory with no
+``node`` in it (exit 127, only under the daemon's stripped PATH — a shell
+test won't reproduce it). Every run happens **on a worker thread** — a
+scan walks the whole transcript tree and takes seconds — and is throttled to
+``cost.refresh_minutes``. Like the update check it must stay **fail-open**:
+no runner, a non-zero exit, or bad JSON degrades to the last cached figures,
+never a crash. The figures are an estimate of what that traffic would cost
+on the API (all CLI agents ccusage detects, not just Claude); it is not a
+bill and has nothing to do with the plan limits shown above.
 
 User-visible display options (top-bar metrics, prefixes, compact, metric
 separator) live in ``settings.py`` (``Settings`` + ``TopbarSettings``) and
@@ -79,6 +107,7 @@ Runtime files (never committed):
 - ``~/.cache/claude-usage-indicator/history.jsonl`` — 72 h of ``(ts, metric, util)`` samples
 - ``~/.config/claude-usage-indicator/accounts.json`` — token-free account index (email/plan/label)
 - ``~/.config/claude-usage-indicator/accounts/<id>.json`` — per-account credential blob, ``0600``
+- ``~/.cache/claude-usage-indicator/costs.json`` — per-day API cost amounts (``(date, amount)`` only)
 - ``~/.claude.json.cusi-bak`` — backup written before a switch rewrites ``~/.claude.json``
 
 ---
@@ -108,6 +137,8 @@ Runtime files (never committed):
 5. **Never write user identifiers to ``history.jsonl``.** Only
    ``(ts, metric, util)`` triples. No email, no token, no account id.
    The cache is not encrypted and the user may share it when debugging.
+   Same rule for ``costs.json`` — ``(date, amount)`` pairs only, never a
+   project path or a session id, even though ccusage knows both.
 
 6. **New user-visible strings go through ``strings.py``.** Add the key in
    **every** language table (EN, FR, ES, DE, JA, PT — all must share the

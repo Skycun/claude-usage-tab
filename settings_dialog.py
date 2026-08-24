@@ -17,9 +17,12 @@ from typing import Callable
 
 from gi.repository import GLib, Gtk
 
+import costs
 import topbar
 from settings import (
+    MIN_COST_REFRESH_MINUTES,
     SCHEMA_VERSION,
+    CostSettings,
     Settings,
     SoundSettings,
     TopbarSettings,
@@ -129,6 +132,47 @@ class SettingsDialog(Gtk.Window):
         row += 1
 
         grid.attach(self._dim(t("dlg_thresholds_hint")), 1, row, 1, 1)
+        row += 1
+
+        # -- API cost (ccusage) ---------------------------------------------
+        # Lives in General rather than its own tab: three widgets don't earn
+        # a tab, and it reads as a sibling of the other polling settings.
+        grid.attach(
+            Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), 0, row, 2, 1
+        )
+        row += 1
+        grid.attach(self._label(t("dlg_cost_section")), 0, row, 2, 1)
+        row += 1
+
+        cost = self.settings.cost
+        self.chk_cost_enabled = self._check(t("dlg_cost_enabled"), cost.enabled)
+        grid.attach(self.chk_cost_enabled, 0, row, 2, 1)
+        row += 1
+
+        grid.attach(self._label(t("dlg_cost_command")), 0, row, 1, 1)
+        self.ent_cost_command = Gtk.Entry(text=cost.command)
+        grid.attach(self.ent_cost_command, 1, row, 1, 1)
+        row += 1
+
+        grid.attach(self._label(t("dlg_cost_refresh")), 0, row, 1, 1)
+        self.spin_cost_refresh = Gtk.SpinButton.new_with_range(
+            MIN_COST_REFRESH_MINUTES, 720, 5
+        )
+        self.spin_cost_refresh.set_value(cost.refresh_minutes)
+        grid.attach(self.spin_cost_refresh, 1, row, 1, 1)
+        row += 1
+
+        # Tell the user up-front whether a runner exists — otherwise the
+        # only feedback is an empty menu row after they save.
+        argv = costs.resolve_command(cost.command)
+        detected = (
+            t("dlg_cost_detected", cmd=" ".join(argv))
+            if argv
+            else t("dlg_cost_missing")
+        )
+        grid.attach(self._dim(detected), 1, row, 1, 1)
+        row += 1
+        grid.attach(self._dim(t("dlg_cost_hint")), 1, row, 1, 1)
         return grid
 
     # ------------------------------------------------------------- tab: top-bar
@@ -493,6 +537,13 @@ class SettingsDialog(Gtk.Window):
             custom_image=self.fc_image.get_filename() or "",
         )
 
+    def _collect_cost(self) -> CostSettings:
+        return CostSettings(
+            enabled=self.chk_cost_enabled.get_active(),
+            command=self.ent_cost_command.get_text().strip(),
+            refresh_minutes=int(self.spin_cost_refresh.get_value()),
+        )
+
     def _collect_thresholds(self) -> tuple[int, ...]:
         out: list[int] = []
         for part in self.ent_thresholds.get_text().split(","):
@@ -520,6 +571,7 @@ class SettingsDialog(Gtk.Window):
             accounts_enabled=self.chk_accounts_enabled.get_active(),
             account_switch_enabled=self.chk_account_switch.get_active(),
             sound=self._collect_sound(),
+            cost=self._collect_cost(),
             topbar=self._collect_topbar(),
         )
 

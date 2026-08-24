@@ -23,17 +23,26 @@ import dataclasses
 import shlex
 import subprocess
 import sys
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import rumps
 
 import accounts
+import costs
 import sound
 import updates
 from alerts import History, evaluate_alerts
 from api import fetch_usage, parse_iso, read_account, read_token
-from formatting import fmt_secs, format_local, format_remaining, progress_bar
+from formatting import (
+    fmt_secs,
+    format_cost,
+    format_local,
+    format_remaining,
+    format_stamp,
+    progress_bar,
+)
 from settings import (
     SETTINGS_PATH,
     VALID_CLAUDE_TOPBAR_METRICS,
@@ -60,6 +69,10 @@ BACKOFF_STAGES = (120, 300, 900, 1800, 3600)
 BOOT_COOLDOWN = timedelta(minutes=5)
 HISTORY_SNAPSHOT_EVERY = 5
 UPDATE_CHECK_DELAY = 5  # seconds after launch before the first update check
+# A ccusage run happens on a worker thread, which must not touch AppKit. It
+# parks its result and raises a flag; this main-loop timer is what re-renders
+# the menu. The tick itself is a boolean check — cheap enough to run often.
+COST_APPLY_INTERVAL = 5
 
 
 # --------------------------------------------------------------- macOS shell-outs
@@ -165,6 +178,13 @@ class ClaudeUsageApp(rumps.App):
             datetime.now(timezone.utc) + BOOT_COOLDOWN
         )
         self.update_info: updates.UpdateInfo | None = updates.cached()
+        # API cost (ccusage), seeded from cache so the row has a number
+        # before the first background run of the session finishes.
+        self.cost_report: costs.CostReport | None = (
+            costs.cached() if self.settings.cost.enabled else None
+        )
+        self._cost_thread: threading.Thread | None = None
+        self._cost_dirty: bool = False
         self.account_states: list[dict] = []
         self._last_claude_state: dict | None = None
         # One-shot timers kept alive while a deferred render is pending.
@@ -182,6 +202,10 @@ class ClaudeUsageApp(rumps.App):
             self._update_check_startup, UPDATE_CHECK_DELAY
         )
         self._update_startup.start()
+        self._cost_apply = rumps.Timer(
+            self._apply_cost_if_dirty, COST_APPLY_INTERVAL
+        )
+        self._cost_apply.start()
 
         self._tick()  # first render immediately
 
@@ -231,6 +255,11 @@ class ClaudeUsageApp(rumps.App):
             self.account_states = self._tick_accounts(now, claude_state)
 
         self._render(claude_state, now)
+
+        # Cost reads local transcripts, so it runs signed in or not.
+        # ``costs.check`` throttles to the configured cadence — this tick
+        # only gives it the opportunity.
+        self._refresh_costs()
 
     def _reload_settings_if_needed(self) -> None:
         current = settings_mtime()
@@ -515,6 +544,10 @@ class ClaudeUsageApp(rumps.App):
                 self._add_account_item(parent, st)
             m.add(parent)
 
+        if costs.is_available(self.settings.cost):
+            m.add(rumps.separator)
+            m.add(self._cost_menu())
+
         if self.active_alerts:
             m.add(rumps.separator)
             m.add(rumps.MenuItem("  ·  ".join(self.active_alerts.values())))
@@ -538,6 +571,84 @@ class ClaudeUsageApp(rumps.App):
         m.add(rumps.separator)
         m.add(rumps.MenuItem(f"v{updates.current_version()}"))
         m.add(rumps.MenuItem(t("quit"), callback=lambda _s: rumps.quit_application()))
+
+    # -- API cost (ccusage) ----------------------------------------------
+
+    def _cost_menu(self) -> rumps.MenuItem:
+        """Summary row + breakdown submenu, built from ``self.cost_report``."""
+        report = self.cost_report
+        if report is None:
+            # A runner exists (we're past is_available) but nothing has been
+            # computed yet — say so rather than showing zeros, which would
+            # read as "you spent nothing today".
+            dash = t("dash")
+            parent = rumps.MenuItem(t("cost_menu_pending"))
+            rows = [
+                t("cost_today", amount=dash),
+                t("cost_7d", amount=dash),
+                t("cost_month", amount=dash),
+                t("cost_pending"),
+            ]
+        else:
+            parent = rumps.MenuItem(
+                t("cost_menu_title", amount=format_cost(report.today))
+            )
+            rows = [
+                t("cost_today", amount=format_cost(report.today)),
+                t("cost_7d", amount=format_cost(report.last_7d)),
+                t("cost_month", amount=format_cost(report.month)),
+                t("cost_stale")
+                if report.stale
+                else t("cost_checked", when=format_stamp(report.checked_at)),
+            ]
+        for line in rows:
+            parent.add(rumps.MenuItem(line))  # no callback → disabled info row
+        parent.add(
+            rumps.MenuItem(t("cost_refresh"), callback=self._on_cost_refresh)
+        )
+        return parent
+
+    def _refresh_costs(self, force: bool = False) -> None:
+        """Kick a background ccusage run; a no-op while one is in flight.
+
+        Never inline: the scan walks the whole transcript tree and would
+        block the menu bar for seconds.
+        """
+        if not costs.is_available(self.settings.cost):
+            return
+        if self._cost_thread is not None and self._cost_thread.is_alive():
+            return
+        cost_settings = self.settings.cost
+
+        def worker() -> None:
+            try:
+                report = costs.check(cost_settings, force=force)
+            except Exception as e:  # noqa: BLE001 — a worker must not kill us
+                print(
+                    f"cost check error: {type(e).__name__}: {e}", file=sys.stderr
+                )
+                return
+            # AppKit is off-limits here — park the result for the timer.
+            self.cost_report = report
+            self._cost_dirty = True
+
+        self._cost_thread = threading.Thread(
+            target=worker, name="ccusage", daemon=True
+        )
+        self._cost_thread.start()
+
+    def _apply_cost_if_dirty(self, _timer: object = None) -> None:
+        """Main-loop half of the worker handoff — re-render when new data landed."""
+        if not self._cost_dirty:
+            return
+        self._cost_dirty = False
+        try:
+            self._render_menu(self._last_claude_state)
+        except Exception as e:  # noqa: BLE001
+            print(f"cost render error: {type(e).__name__}: {e}", file=sys.stderr)
+
+    def _on_cost_refresh(self, _sender: object = None) -> None:
+        self._refresh_costs(force=True)
 
     def _add_account_item(self, parent: rumps.MenuItem, st: dict) -> None:
         acct: accounts.Account = st["acct"]
@@ -651,6 +762,19 @@ class ClaudeUsageApp(rumps.App):
             )
         )
         opts.add(sound_menu)
+        # Only offer the toggle where ticking it would actually do something:
+        # a validated platform with a runner installed. There is no settings
+        # dialog here to explain an inert checkbox.
+        if costs.platform_supported() and costs.runner_available(
+            self.settings.cost.command
+        ):
+            opts.add(
+                self._check_item(
+                    t("dlg_cost_enabled"),
+                    self.settings.cost.enabled,
+                    lambda _s: self._toggle_cost_enabled(),
+                )
+            )
         return opts
 
     def _save_and_apply(self, new: Settings) -> None:
@@ -693,6 +817,18 @@ class ClaudeUsageApp(rumps.App):
 
     def _set_language(self, code: str) -> None:
         self._save_and_apply(dataclasses.replace(self.settings, lang=code))
+
+    def _toggle_cost_enabled(self) -> None:
+        """Flip the cost readout. The command/cadence stay in settings.json."""
+        cost = dataclasses.replace(
+            self.settings.cost, enabled=not self.settings.cost.enabled
+        )
+        self._save_and_apply(dataclasses.replace(self.settings, cost=cost))
+        if cost.enabled:
+            # Show whatever the cache holds right away, then refresh.
+            if self.cost_report is None:
+                self.cost_report = costs.cached()
+            self._refresh_costs()
 
     def _toggle_sound_enabled(self) -> None:
         snd = dataclasses.replace(

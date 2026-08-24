@@ -10,8 +10,9 @@ endpoint Claude Code's ``/usage`` command uses) and surfaces the data in
 the GNOME top bar:
 
   * label:   "5h 17%  ·  7j 5%", prefixed with "/!\\" when an alert is active
-  * menu:    session + weekly + sonnet + extra, account, refresh, quit,
-             edit settings, clear active alerts
+  * menu:    session + weekly + sonnet + extra, account, API cost
+             (opt-in, via ccusage), refresh, quit, edit settings,
+             clear active alerts
   * notifs:  on reset (new window), on crossing 80/95%, and on custom
              rate alerts defined in settings.json
 
@@ -32,6 +33,7 @@ from __future__ import annotations
 import shlex
 import subprocess
 import sys
+import threading
 import webbrowser
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -46,6 +48,7 @@ from gi.repository import GLib, Gtk, Notify  # noqa: E402
 
 import accounts  # noqa: E402
 from alerts import History, evaluate_alerts  # noqa: E402
+import costs  # noqa: E402
 from api import (  # noqa: E402
     fetch_usage,
     format_provider_header,
@@ -64,8 +67,10 @@ from settings import (  # noqa: E402
 from strings import current_lang, detect_lang, set_lang, setup_locale, t  # noqa: E402
 from topbar import compose_label  # noqa: E402
 from formatting import (  # noqa: E402
+    format_cost,
     format_local,
     format_remaining,
+    format_stamp,
     fmt_secs as _fmt_secs,
     progress_bar,
 )
@@ -186,6 +191,14 @@ class Indicator:
         # instantly; the live check a few seconds after launch revalidates.
         self.update_info: updates.UpdateInfo | None = updates.cached()
 
+        # API cost (ccusage). Seeded from cache the same way, so the row
+        # carries a number before the first background run of the session
+        # finishes. One worker at a time — a scan is expensive.
+        self.cost_report: costs.CostReport | None = (
+            costs.cached() if self.settings.cost.enabled else None
+        )
+        self._cost_thread: threading.Thread | None = None
+
         self.history = History()
         self.history.load_from_disk()
         self.tick_counter: int = 0
@@ -211,6 +224,7 @@ class Indicator:
         self._build_menu()
         self._set_connected(self.token is not None)
         self._apply_update_ui()  # reflect any cached "update available" now
+        self._apply_cost_ui()  # ditto for the last known cost figures
         self.ind.set_menu(self.menu)
         Notify.init(APP_ID)
 
@@ -241,6 +255,26 @@ class Indicator:
         self.accounts_submenu = Gtk.Menu()
         self.item_accounts.set_submenu(self.accounts_submenu)
 
+        # API cost submenu (ccusage) — one summary row in the main menu,
+        # the breakdown behind it. Hidden entirely unless opted in.
+        self.item_costs = Gtk.MenuItem(label=t("cost_menu_pending"))
+        self.costs_submenu = Gtk.Menu()
+        self.item_cost_today = self._info_item("")
+        self.item_cost_7d = self._info_item("")
+        self.item_cost_month = self._info_item("")
+        self.item_cost_status = self._info_item("")
+        self.item_cost_refresh = Gtk.MenuItem(label=t("cost_refresh"))
+        self.item_cost_refresh.connect("activate", self._on_cost_refresh)
+        for sub in (
+            self.item_cost_today,
+            self.item_cost_7d,
+            self.item_cost_month,
+            self.item_cost_status,
+            self.item_cost_refresh,
+        ):
+            self.costs_submenu.append(sub)
+        self.item_costs.set_submenu(self.costs_submenu)
+
         self.item_active_alerts = self._info_item("")
         self.item_clear_alerts = Gtk.MenuItem(label=t("clear_alerts"))
         self.item_clear_alerts.connect("activate", self._on_clear_alerts)
@@ -267,6 +301,7 @@ class Indicator:
             self.item_sonnet,
             self.item_extra,
             self.item_accounts,
+            self.item_costs,
             self.sep_alerts,
             self.item_active_alerts,
             self.item_clear_alerts,
@@ -300,6 +335,8 @@ class Indicator:
         self.item_accounts.hide()
         # Update row hidden until a newer release is found.
         self.item_update.hide()
+        # Cost row hidden unless the (opt-in) feature is enabled.
+        self.item_costs.hide()
 
     @staticmethod
     def _info_item(label: str) -> Gtk.MenuItem:
@@ -390,6 +427,88 @@ class Indicator:
     def _test_sound(self, snd: SoundSettings) -> None:
         """Preview the (possibly unsaved) sound settings from the dialog."""
         sound.preview(snd, ASSETS_DIR)
+
+    # ---------------------------------------------------------- API cost
+
+    def _refresh_costs(self, force: bool = False) -> None:
+        """Kick a background ccusage run and apply the result on the main loop.
+
+        Never runs inline: ``costs.check`` spawns a subprocess that walks the
+        whole transcript tree, which would freeze the top bar for seconds.
+        One worker at a time — a second click while a scan is in flight is a
+        no-op, not a second process.
+        """
+        if not costs.is_available(self.settings.cost):
+            return
+        if self._cost_thread is not None and self._cost_thread.is_alive():
+            return
+        cost_settings = self.settings.cost
+
+        def worker() -> None:
+            try:
+                report = costs.check(cost_settings, force=force)
+            except Exception as e:  # noqa: BLE001 — a worker must not kill us
+                print(
+                    f"cost check error: {type(e).__name__}: {e}", file=sys.stderr
+                )
+                return
+            # idle_add is the supported way back onto the GTK main loop.
+            GLib.idle_add(self._apply_cost_result, report)
+
+        self._cost_thread = threading.Thread(
+            target=worker, name="ccusage", daemon=True
+        )
+        self._cost_thread.start()
+
+    def _apply_cost_result(self, report: costs.CostReport | None) -> bool:
+        self.cost_report = report
+        self._apply_cost_ui()
+        return False  # one-shot idle source
+
+    def _apply_cost_ui(self) -> None:
+        """Label + show/hide the cost submenu from ``self.cost_report``.
+
+        ``costs.is_available`` gates the whole row: opted out, an unvalidated
+        platform, or no runner on the machine all hide it outright.
+        """
+        if not costs.is_available(self.settings.cost):
+            self.item_costs.hide()
+            return
+        self.item_cost_refresh.set_label(t("cost_refresh"))
+        report = self.cost_report
+        if report is None:
+            # A runner exists (we're past is_available) but nothing has been
+            # computed yet — say so rather than showing zeros, which would
+            # read as "you spent nothing today".
+            dash = t("dash")
+            self.item_costs.set_label(t("cost_menu_pending"))
+            self.item_cost_today.set_label(t("cost_today", amount=dash))
+            self.item_cost_7d.set_label(t("cost_7d", amount=dash))
+            self.item_cost_month.set_label(t("cost_month", amount=dash))
+            self.item_cost_status.set_label(t("cost_pending"))
+        else:
+            self.item_costs.set_label(
+                t("cost_menu_title", amount=format_cost(report.today))
+            )
+            self.item_cost_today.set_label(
+                t("cost_today", amount=format_cost(report.today))
+            )
+            self.item_cost_7d.set_label(
+                t("cost_7d", amount=format_cost(report.last_7d))
+            )
+            self.item_cost_month.set_label(
+                t("cost_month", amount=format_cost(report.month))
+            )
+            self.item_cost_status.set_label(
+                t("cost_stale")
+                if report.stale
+                else t("cost_checked", when=format_stamp(report.checked_at))
+            )
+        self.item_costs.show()
+
+    def _on_cost_refresh(self, _item: Gtk.MenuItem) -> None:
+        self.item_cost_status.set_label(t("cost_pending"))
+        self._refresh_costs(force=True)
 
     # ------------------------------------------------------------- updates
 
@@ -496,6 +615,7 @@ class Indicator:
         self.item_login.set_label(t("login_item"))
         self.item_clear_alerts.set_label(t("clear_alerts"))
         self.item_edit_settings.set_label(t("edit_settings"))
+        self._apply_cost_ui()
 
     def _apply_loaded_settings(self, old: Settings) -> None:
         """React to a freshly loaded ``self.settings`` (lang, poll cadence)."""
@@ -506,6 +626,12 @@ class Indicator:
             self._relabel_static()
         if old.poll_seconds != self.settings.poll_seconds:
             self._reset_poll_timer()
+        if old.cost != self.settings.cost:
+            # Just enabled: show whatever the cache holds immediately, then
+            # let the next tick refresh it in the background.
+            if self.settings.cost.enabled and self.cost_report is None:
+                self.cost_report = costs.cached()
+            self._apply_cost_ui()
 
     def _reload_settings_if_needed(self) -> None:
         """Pick up external edits to settings.json (mtime-watched)."""
@@ -572,6 +698,11 @@ class Indicator:
             account_states = self._tick_accounts(now, claude_state)
 
         self._render(claude_state, account_states, now=now)
+
+        # Cost is independent of the usage endpoint (local transcripts), so
+        # it runs whether or not we're signed in. ``costs.check`` throttles
+        # to the configured cadence — this tick just gives it the chance.
+        self._refresh_costs()
 
     def _tick_claude(self, now: datetime) -> dict:
         """Fetch (or replay) Claude usage. Returns a state dict for ``_render``.

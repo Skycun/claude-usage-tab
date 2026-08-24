@@ -100,6 +100,10 @@ present inside virtualenvs.
 - 🎛️ **Customisable display** — choose which metrics show, labels vs bare
   percentages, compact mode, separators — all from a settings window with
   a live preview.
+- 💸 **Daily API cost** *(opt-in)* — what today's Claude Code traffic would
+  have cost on the API, plus rolling 7 days and this month, computed
+  locally by [ccusage](https://github.com/ryoppippi/ccusage). →
+  [API cost](#api-cost)
 - 👥 **Multi-account switcher** — remembers every Claude account you sign
   in as, shows each one's usage, and (opt-in) switches which account
   Claude Code uses next. → [Multiple accounts](#multiple-accounts)
@@ -167,7 +171,8 @@ the Linux build, and the known caveats (Keychain, notifications).
 
 Open **Settings…** from the menu — a small GTK window with four tabs:
 
-- **General** — language, refresh interval, alert thresholds.
+- **General** — language, refresh interval, alert thresholds, and the
+  opt-in [API cost](#api-cost) readout.
 - **Top-bar** — which metrics show (5h / 7d / Sonnet), the `C` prefix, the
   `/!\` alert prefix, per-metric labels, compact mode, the separator, and
   decimals. A **live preview** updates as you toggle.
@@ -182,13 +187,18 @@ by hand (invalid values fall back to defaults instead of crashing):
 
 ```jsonc
 {
-  "schema_version": 2,
+  "schema_version": 4,
   "lang": "en",                        // en · fr · es · de · ja · pt
   "poll_seconds": 60,                  // minimum 10
   "builtin_thresholds": [80, 95],      // notify at these % (0–100)
   "update_check_enabled": true,        // check GitHub for new releases
   "accounts_enabled": true,            // remember + show all your accounts
   "account_switch_enabled": false,     // opt-in: allow switching (writes ~/.claude)
+  "cost": {
+    "enabled": false,                  // opt-in: API cost row in the dropdown
+    "command": "",                     // "" = auto-detect ccusage / bunx / npx
+    "refresh_minutes": 15              // minimum 1 — a scan is expensive
+  },
   "topbar": {
     "show_claude": true,               // show the label at all
     "claude_metrics": ["five_hour", "seven_day"],  // + "seven_day_sonnet"
@@ -224,6 +234,50 @@ usage grows by at least `delta_pp` percentage points within
 the label, and a **Clear alerts** item in the menu. Alerts re-arm when the
 metric resets or when you clear them. There's a 5-minute quiet period at
 startup while history builds up.
+
+---
+
+## API cost
+
+Claude Code writes every request it makes to
+`~/.claude/projects/**/*.jsonl`. [ccusage](https://github.com/ryoppippi/ccusage)
+reads those transcripts and prices them, which answers a question the plan
+limits can't: **what would today's usage have cost on the API?**
+
+Turn it on in **Settings ▸ General ▸ API cost** (Linux for now — the macOS
+menu-bar build gets it once the path has been exercised on a real Mac). The dropdown then grows an
+**API cost — $12.40 today** row, with today / last 7 days / this month
+behind it, plus a **Recalculate now** action.
+
+```
+API cost — $12.40 today  ▸   Today: $12.40
+                             Last 7 days: $86.10
+                             This month: $214.75
+                             Updated Mon 24 Aug 16:13
+                             Recalculate now
+```
+
+**What you need.** Nothing extra if you already have
+[bun](https://bun.sh), Node or [pnpm](https://pnpm.io): the indicator runs
+`ccusage` if it's installed, otherwise `bunx ccusage@latest`, `npx -y
+ccusage@latest` or `pnpm dlx ccusage@latest` — whichever it finds. It looks
+in the usual per-user install dirs (`~/.bun/bin`, nvm, corepack,
+`~/.local/share/pnpm`, …), not just `PATH`. If none of them exists the
+row simply doesn't appear — the settings window tells you why when you
+tick the box. Set `cost.command` to override (a pinned version, a
+wrapper script…).
+
+**Good to know**
+
+- The figure is an **estimate**, not a bill. It's what the tokens would
+  cost at API rates — your Pro/Max subscription is unaffected.
+- ccusage counts **every CLI agent** it finds in your transcripts, so the
+  total can include tools other than Claude Code.
+- Recomputing walks your whole transcript tree (hundreds of MB is normal),
+  so it runs on a background thread every `refresh_minutes` (15 by
+  default), never on the 60 s usage poll.
+- Cached in `~/.cache/claude-usage-indicator/costs.json` — dates and
+  amounts only, no project names, no session ids.
 
 ---
 
@@ -303,6 +357,7 @@ api.py                      # token read + usage fetch + token refresh
 accounts.py                 # multi-account store + switch
 alerts.py                   # usage history + custom-alert engine
 updates.py / version.py     # GitHub release check + version
+costs.py                    # daily API cost via ccusage (opt-in)
 install.sh / update.sh / uninstall.sh
 icons/                      # default · gray · full states
 ```
