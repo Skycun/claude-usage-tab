@@ -53,7 +53,16 @@ $pyArgs = @()
 # venv is imported too, not just sys: a Python that cannot create one is no
 # use to us, and finding that out here gives a clear message instead of an
 # opaque failure three steps later.
-$probeCode = 'import sys, venv;print("CUSI-PY %d.%d" % sys.version_info[:2])'
+#
+# The Python string is single-quoted INSIDE a double-quoted PowerShell string,
+# and that order is not cosmetic. Windows PowerShell 5.1 drops embedded double
+# quotes when it hands an argument to a native .exe, so the reversed form
+# reaches python.exe as  print(CUSI-PY %d.%d ...  -- a SyntaxError, an empty
+# capture, and a bogus "No usable Python 3.9+ found" on a machine that has a
+# perfectly good one. PowerShell 7 fixed native argument quoting; 5.1 is what
+# most users still get from the Start menu, and the #Requires above promises
+# them this script runs.
+$probeCode = "import sys, venv;print('CUSI-PY %d.%d' % sys.version_info[:2])"
 foreach ($cand in @('py', 'python3', 'python')) {
     $found = Get-Command $cand -ErrorAction SilentlyContinue
     if (-not $found) { continue }

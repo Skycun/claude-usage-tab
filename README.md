@@ -51,6 +51,10 @@ cd ~/claude-usage-tab
 ./install.sh
 ```
 
+> **On Windows?** Don't paste that — PowerShell doesn't expand `~`, so you'd
+> get a folder literally called `~`. Use the
+> [Windows](#windows-experimental) commands instead.
+
 That's it — the indicator appears in your top bar and starts polling. The
 installer detects Ubuntu (`apt`) or Fedora (`dnf`), installs the handful
 of system packages it needs, copies the icons, adds an app-grid entry,
@@ -174,12 +178,34 @@ the Linux build, and the known caveats (Keychain, notifications).
 
 There's a **system-tray** build for Windows — the notification area at the
 bottom-right of the taskbar — driven by
-[`pystray`](https://github.com/moses-palmer/pystray) + Pillow:
+[`pystray`](https://github.com/moses-palmer/pystray) + Pillow.
+
+You need **Python 3.9+** (from [python.org](https://www.python.org/downloads/),
+ticking *Add python.exe to PATH*) and **Claude Code** signed in at least
+once. Then, in **PowerShell** — not Command Prompt, not Git Bash:
 
 ```powershell
-git clone https://github.com/Skycun/claude-usage-tab.git $HOME\claude-usage-tab
-cd $HOME\claude-usage-tab
+cd $HOME
+git clone https://github.com/Skycun/claude-usage-tab.git
+cd claude-usage-tab
 .\install-windows.ps1
+```
+
+> [!NOTE]
+> There is deliberately no `~` in there. PowerShell passes `~` to `git`
+> unexpanded, so the bash form from the Quick start
+> (`git clone ... ~/claude-usage-tab`) clones into a folder *literally named*
+> `~`, and the `cd` after it then fails. The commands above cannot do that.
+> If you already have such a folder, it holds your clone at
+> `.\~\claude-usage-tab` — move that out, then
+> `Remove-Item -LiteralPath '.\~' -Recurse` (keep the `.\`; a bare `'~'`
+> resolves to your entire user profile).
+
+If PowerShell refuses to run the script at all, that's the execution policy
+rather than the script:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install-windows.ps1
 ```
 
 The tray gives you an icon and a tooltip, and nothing else — so the number
