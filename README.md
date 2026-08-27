@@ -1,15 +1,15 @@
 # Claude Usage Tab
 
-**See your Claude Code usage in the GNOME top bar — your 5-hour session and 7-day weekly limits, always one glance away.**
+**See your Claude Code usage without leaving your desktop — your 5-hour session and 7-day weekly limits, always one glance away, in the GNOME top bar, the macOS menu bar or the Windows notification area.**
 
-![version](https://img.shields.io/badge/version-1.0.0-blue)
+![version](https://img.shields.io/badge/version-1.3.0-blue)
 ![platform](https://img.shields.io/badge/platform-Linux%20·%20macOS%20·%20Windows-informational)
-![python](https://img.shields.io/badge/python-system%203-blue)
+![python](https://img.shields.io/badge/python-system%203%20·%203.9%2B%20venv-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 
 Same numbers as `claude /usage`, but you never have to open a terminal to
 check how much budget you have left. A tiny always-on indicator sits in
-your top bar, turns colour as you approach your limits, and can ping you
+your bar, turns colour as you approach your limits, and can ping you
 before you run out.
 
 ```
@@ -26,10 +26,23 @@ before you run out.
 
 ---
 
-## Requirements
+## Platforms
 
-*(This section and the Quick start below cover the **Linux** build. For the
-other two see [macOS](#macos-experimental) and [Windows](#windows-experimental).)*
+One engine, three shells — the polling, the alerts, the accounts and the
+settings file are identical everywhere; only the presentation layer differs.
+
+| | Where it lives | Built on | Install | Status |
+|---|---|---|---|---|
+| **Linux** | GNOME top bar | GTK + AppIndicator, system Python | `./install.sh` | stable |
+| **macOS** | menu bar | [`rumps`](https://github.com/jaredks/rumps), venv | `./install-macos.sh` | experimental |
+| **Windows** | notification area | [`pystray`](https://github.com/moses-palmer/pystray) + Pillow, venv | `.\install-windows.ps1` | experimental |
+
+Jump to [macOS](#macos-experimental) or [Windows](#windows-experimental) —
+the Requirements and Quick start below describe the **Linux** build.
+
+---
+
+## Requirements (Linux)
 
 - **Linux with GNOME** (tested on Ubuntu and Fedora; anything GNOME-based
   should work).
@@ -43,7 +56,7 @@ Python and the GTK libraries your distro already ships.
 
 ---
 
-## Quick start
+## Quick start (Linux)
 
 ```bash
 git clone https://github.com/Skycun/claude-usage-tab.git ~/claude-usage-tab
@@ -88,68 +101,6 @@ The `/usr/bin/python3` path is deliberate: PyGObject comes from your
 distro's `python3-gi` / `python3-gobject` package and usually isn't
 present inside virtualenvs.
 </details>
-
----
-
-## Features
-
-- 🟦 **Top-bar label** — `C 17% . 5%`, refreshed every 60 s, with a
-  `/!\` prefix when a custom alert is firing.
-- 🎨 **Colour-coded icon** — normal, **gray** when there's no active
-  session or the endpoint is rate-limited, **pink** when you hit a limit.
-- 📊 **Rich dropdown** — session + weekly bars with reset countdowns, the
-  Sonnet sub-limit and extra-usage credits when present, your account
-  email + plan, and a one-click refresh.
-- 🎛️ **Customisable display** — choose which metrics show, labels vs bare
-  percentages, compact mode, separators — all from a settings window with
-  a live preview.
-- 💸 **Daily API cost** *(opt-in)* — what today's Claude Code traffic would
-  have cost on the API, plus rolling 7 days and this month, computed
-  locally by [ccusage](https://github.com/ryoppippi/ccusage). →
-  [API cost](#api-cost)
-- 👥 **Multi-account switcher** — remembers every Claude account you sign
-  in as, shows each one's usage, and (opt-in) switches which account
-  Claude Code uses next. → [Multiple accounts](#multiple-accounts)
-- 🔔 **Notifications** — when a window resets, when you cross 80 % / 95 %,
-  and on your own custom rate alerts.
-- ⬆️ **Built-in updates** — checks GitHub for a new release and updates in
-  one click. → [Updates](#updates)
-- 🌍 **Multilingual** — English (default), French, Spanish, German,
-  Japanese and Portuguese (BR).
-- 🛟 **Fails gracefully** — a missing token, an outage, or Anthropic's
-  known `429` bug never crash it; stats stay on screen and it retries with
-  backoff.
-
----
-
-## Updates
-
-The indicator checks GitHub for a newer release shortly after launch and
-every 6 hours (an anonymous request — no token, nothing about you is
-sent; you can turn it off under **Settings ▸ Maintenance**). When a newer
-version exists you get:
-
-- a one-time desktop notification,
-- an **_Update available (vX.Y.Z)_** row in the menu, and
-- a status line at the bottom of the settings window.
-
-Click it (or **Update now** in **Settings ▸ Maintenance**) — it opens a
-terminal, runs `git pull --ff-only` then reinstalls, keeping your
-autostart choice. Your settings and history are untouched. Prefer the
-command line? `./update.sh` does the same thing.
-
-## Uninstall
-
-From the app: **Settings ▸ Maintenance ▸ Uninstall the app…** (tick the
-box to also wipe your data). Or from a terminal:
-
-```bash
-./uninstall.sh           # remove the app, keep settings & history
-./uninstall.sh --purge   # also wipe settings, history and stored accounts
-```
-
-System packages and the GNOME extension are left in place (other apps may
-use them).
 
 ---
 
@@ -198,9 +149,82 @@ logs, and the known caveats.
 
 ---
 
+## Features
+
+- 🟦 **Always-on readout** — `C 17% . 5%`, refreshed every 60 s, with a
+  `/!\` prefix when a custom alert is firing. In the GNOME top bar, the
+  macOS menu bar, or — on Windows, where the tray has no text — drawn
+  straight into the icon.
+- 🎨 **Colour-coded icon** — normal, **gray** when there's no active
+  session or the endpoint is rate-limited, **pink** when you hit a limit
+  (on Windows the tile itself goes amber at 80 %, red at 95 %).
+- 📊 **Rich dropdown** — session + weekly bars with reset countdowns, the
+  Sonnet sub-limit and extra-usage credits when present, your account
+  email + plan, and a one-click refresh.
+- 🎛️ **Customisable display** — choose which metrics show, labels vs bare
+  percentages, compact mode, separators — from a GTK settings window with
+  a live preview on Linux, an **Options** submenu on macOS and Windows.
+- 💸 **Daily API cost** *(opt-in)* — what today's Claude Code traffic would
+  have cost on the API, plus rolling 7 days and this month, computed
+  locally by [ccusage](https://github.com/ryoppippi/ccusage). →
+  [API cost](#api-cost)
+- 👥 **Multi-account switcher** — remembers every Claude account you sign
+  in as, shows each one's usage, and (opt-in) switches which account
+  Claude Code uses next. → [Multiple accounts](#multiple-accounts)
+- 🔔 **Notifications** — when a window resets, when you cross 80 % / 95 %,
+  and on your own custom rate alerts.
+- ⬆️ **Built-in updates** — checks GitHub for a new release and updates in
+  one click. → [Updates](#updates)
+- 🌍 **Multilingual** — English (default), French, Spanish, German,
+  Japanese and Portuguese (BR).
+- 🛟 **Fails gracefully** — a missing token, an outage, or Anthropic's
+  known `429` bug never crash it; stats stay on screen and it retries with
+  backoff.
+
+---
+
+## Updates
+
+The indicator checks GitHub for a newer release shortly after launch and
+every 6 hours (an anonymous request — no token, nothing about you is
+sent; you can turn it off under **Settings ▸ Maintenance**). When a newer
+version exists you get:
+
+- a one-time desktop notification,
+- an **_Update available (vX.Y.Z)_** row in the menu, and
+- a status line at the bottom of the settings window.
+
+Click it (or **Update now** in **Settings ▸ Maintenance**) — it opens a
+terminal, runs `git pull --ff-only` then reinstalls, keeping your
+autostart choice. Your settings and history are untouched. Prefer the
+command line? `./update.sh` (Linux), `./update-macos.sh` or
+`.\update-windows.ps1` do the same thing.
+
+## Uninstall
+
+From the app: **Settings ▸ Maintenance ▸ Uninstall the app…** (tick the
+box to also wipe your data). Or from a terminal:
+
+```bash
+./uninstall.sh           # Linux — remove the app, keep settings & history
+./uninstall.sh --purge   # also wipe settings, history and stored accounts
+
+./uninstall-macos.sh     # macOS — same, --purge available
+```
+```powershell
+.\uninstall-windows.ps1          # Windows — remove the app, keep your data
+.\uninstall-windows.ps1 -Purge   # also wipe settings, history and accounts
+```
+
+System packages and the GNOME extension are left in place (other apps may
+use them), and nothing under `~/.claude` is ever touched.
+
+---
+
 ## Settings
 
-Open **Settings…** from the menu — a small GTK window with four tabs:
+Open **Settings…** from the menu. On **Linux** that's a small GTK window
+with four tabs:
 
 - **General** — language, refresh interval, alert thresholds, and the
   opt-in [API cost](#api-cost) readout.
@@ -212,9 +236,15 @@ Open **Settings…** from the menu — a small GTK window with four tabs:
 - **Maintenance** — version, update check on/off, **Update now**, and
   **Uninstall**.
 
+On **macOS** and **Windows** there is no GTK window: the everyday toggles
+live in a checkable **Options** submenu, and **Settings…** opens
+`settings.json` in your default editor for the rest.
+
 Changes apply immediately — no restart. Everything is stored in
-`~/.config/claude-usage-indicator/settings.json`, which you can also edit
-by hand (invalid values fall back to defaults instead of crashing):
+`~/.config/claude-usage-indicator/settings.json`
+(`%USERPROFILE%\.config\claude-usage-indicator\settings.json` on Windows —
+same layout on all three), which you can also edit by hand (invalid values
+fall back to defaults instead of crashing):
 
 ```jsonc
 {
@@ -275,8 +305,9 @@ Claude Code writes every request it makes to
 reads those transcripts and prices them, which answers a question the plan
 limits can't: **what would today's usage have cost on the API?**
 
-Turn it on in **Settings ▸ General ▸ API cost** (Linux for now — the macOS
-menu-bar build gets it once the path has been exercised on a real Mac). The dropdown then grows an
+Turn it on in **Settings ▸ General ▸ API cost** (Linux and Windows — the
+macOS menu-bar build gets it once the path has been exercised on a real
+Mac). The dropdown then grows an
 **API cost — $12.40 today** row, with today / last 7 days / this month
 behind it, plus a **Recalculate now** action.
 
@@ -293,7 +324,8 @@ API cost — $12.40 today  ▸   Today: $12.40
 `ccusage` if it's installed, otherwise `bunx ccusage@latest`, `npx -y
 ccusage@latest` or `pnpm dlx ccusage@latest` — whichever it finds. It looks
 in the usual per-user install dirs (`~/.bun/bin`, nvm, corepack,
-`~/.local/share/pnpm`, …), not just `PATH`. If none of them exists the
+`~/.local/share/pnpm`, and on Windows `%APPDATA%\npm`,
+`%LOCALAPPDATA%\pnpm`, Volta…), not just `PATH`. If none of them exists the
 row simply doesn't appear — the settings window tells you why when you
 tick the box. Set `cost.command` to override (a pinned version, a
 wrapper script…).
@@ -342,18 +374,33 @@ Stored accounts live in `~/.config/claude-usage-indicator/accounts/`
 
 ## Troubleshooting
 
-**Nothing shows in the top bar**
+**Nothing shows in the top bar** *(Linux)*
 ```bash
 gnome-extensions list --enabled | grep -i appindicator   # extension on?
 pgrep -a -f claude_usage_indicator.py                     # daemon running?
 tail -n 50 /tmp/claude_usage_indicator.log                # any errors?
 ```
 
+**Nothing shows in the menu bar** *(macOS)* — the app runs from a
+LaunchAgent; check it is loaded and read its log
+(see [docs/macos.md](./docs/macos.md)):
+```bash
+launchctl list | grep claude-usage-tab
+tail -n 50 ~/Library/Logs/claude-usage-tab.log
+```
+
+**No tray icon** *(Windows)* — Windows hides new icons behind the `^`
+chevron: click it and drag the Claude tile onto the taskbar. Autostart runs
+under `pythonw.exe`, which has no console, so errors go to a file:
+```powershell
+Get-Content -Wait "$env:LOCALAPPDATA\claude-usage-indicator\tray.log"
+```
+
 **The icon is always gray** — either your 5-hour window is at 0 % (no
 active session) or the endpoint is rate-limited. Open the menu: the
 refresh line says *Rate-limited (retry in …)* in the second case.
 
-**Check the endpoint directly**
+**Check the endpoint directly** *(Linux / macOS — the script is bash)*
 ```bash
 bash test_claude_usage.sh
 ```
@@ -405,11 +452,21 @@ icons/                      # default · gray · full states
 
 ## Contributing
 
-Issues and PRs are welcome. There's no build to set up — clone, edit,
-and run `/usr/bin/python3 claude_usage_indicator.py` (see
+Issues and PRs are welcome. There's no build to set up — clone, edit, and
+run the front-end for your platform:
+
+```bash
+/usr/bin/python3 claude_usage_indicator.py        # Linux (system Python)
+.venv/bin/python3 claude_usage_menubar.py         # macOS
+.\.venv\Scripts\python.exe claude_usage_tray.py   # Windows
+```
+
+Logic belongs in the shared modules (`api`, `settings`, `alerts`,
+`accounts`, `updates`, `costs`, `topbar`, `strings`, `formatting`,
+`sound`) so a fix lands once and every platform gets it — see
 [CLAUDE.md](./CLAUDE.md) for the design notes and the few
-non-negotiables). New user-facing text must ship both English and French
-strings.
+non-negotiables. New user-facing text must be added to **all six**
+language tables in `strings.py` (EN, FR, ES, DE, JA, PT).
 
 ## Upstream to watch
 

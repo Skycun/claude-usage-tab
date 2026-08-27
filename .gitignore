@@ -10,9 +10,14 @@ __pycache__/
 .venv/
 venv/
 .env
+.pytest_cache/
 .vscode/
 .idea/
 *.swp
 *.swo
+# macOS
 .DS_Store
+# Windows
+Thumbs.db
+desktop.ini
 *.log
