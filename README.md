@@ -3,7 +3,7 @@
 **See your Claude Code usage in the GNOME top bar — your 5-hour session and 7-day weekly limits, always one glance away.**
 
 ![version](https://img.shields.io/badge/version-1.0.0-blue)
-![platform](https://img.shields.io/badge/platform-Linux%20·%20GNOME-informational)
+![platform](https://img.shields.io/badge/platform-Linux%20·%20macOS%20·%20Windows-informational)
 ![python](https://img.shields.io/badge/python-system%203-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 
@@ -27,6 +27,9 @@ before you run out.
 ---
 
 ## Requirements
+
+*(This section and the Quick start below cover the **Linux** build. For the
+other two see [macOS](#macos-experimental) and [Windows](#windows-experimental).)*
 
 - **Linux with GNOME** (tested on Ubuntu and Fedora; anything GNOME-based
   should work).
@@ -164,6 +167,34 @@ cd ~/claude-usage-tab
 It's newer and needs validation on real hardware — see
 [docs/macos.md](./docs/macos.md) for what's supported, the differences from
 the Linux build, and the known caveats (Keychain, notifications).
+
+---
+
+## Windows (experimental)
+
+There's a **system-tray** build for Windows — the notification area at the
+bottom-right of the taskbar — driven by
+[`pystray`](https://github.com/moses-palmer/pystray) + Pillow:
+
+```powershell
+git clone https://github.com/Skycun/claude-usage-tab.git $HOME\claude-usage-tab
+cd $HOME\claude-usage-tab
+.\install-windows.ps1
+```
+
+The tray gives you an icon and a tooltip, and nothing else — so the number
+*is* the icon: your utilisation is drawn into a coloured tile (Claude
+terracotta, amber from 80%, red from 95%, grey when the reading is stale),
+the tooltip holds the detail, and right-click opens the same dropdown as the
+other platforms.
+
+```
+ [42]              <- the tray icon itself, in your notification area
+```
+
+Also new and needing validation on real hardware — see
+[docs/windows.md](./docs/windows.md) for the install details, autostart,
+logs, and the known caveats.
 
 ---
 
@@ -349,16 +380,24 @@ stay on screen, the icon greys, and it retries with exponential backoff
 ### Project layout
 
 ```
-claude_usage_indicator.py   # the indicator (UI + poll loop)
+claude_usage_indicator.py   # Linux front-end (GTK/AppIndicator)
+claude_usage_menubar.py     # macOS front-end (rumps)
+claude_usage_tray.py        # Windows front-end (pystray)
 topbar.py                   # top-bar label composition
+formatting.py               # shared render helpers (durations, bars, coercion)
 settings_dialog.py          # GTK settings window
-settings.py / strings.py    # config schema + English/French strings
+settings.py / strings.py    # config schema + 6 language tables
 api.py                      # token read + usage fetch + token refresh
 accounts.py                 # multi-account store + switch
 alerts.py                   # usage history + custom-alert engine
 updates.py / version.py     # GitHub release check + version
 costs.py                    # daily API cost via ccusage (opt-in)
-install.sh / update.sh / uninstall.sh
+sound.py                    # 80% flourish, all three platforms
+trayicon.py                 # Windows: draws the percentage badge (Pillow)
+winshell.py                 # Windows: dialogs, autostart, launching (ctypes)
+install.sh / update.sh / uninstall.sh                  # Linux
+install-macos.sh / update-macos.sh / uninstall-macos.sh
+install-windows.ps1 / update-windows.ps1 / uninstall-windows.ps1
 icons/                      # default · gray · full states
 ```
 

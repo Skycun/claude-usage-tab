@@ -45,6 +45,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "update_notif_body": "Claude Usage Tab v{ver} est disponible — ouvre les Réglages ▸ Maintenance pour l'installer.",
         "update_spawn_fail_title": "Impossible de lancer la mise à jour",
         "update_spawn_fail_body": "Aucun terminal trouvé. Mets à jour à la main : git pull puis ./install.sh",
+        # windows tray
+        "win_startup": "Lancer au démarrage de Windows",
+        "win_update_manual": "Impossible de lancer PowerShell. Mets à jour à la main : git pull puis .\\install-windows.ps1",
         # settings dialog
         "dlg_title": "Réglages — Claude Usage",
         "dlg_tab_general": "Général",
@@ -209,6 +212,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "update_notif_body": "Claude Usage Tab v{ver} is available — open Settings ▸ Maintenance to install it.",
         "update_spawn_fail_title": "Could not launch the update",
         "update_spawn_fail_body": "No terminal found. Update manually: git pull, then ./install.sh",
+        # windows tray
+        "win_startup": "Start with Windows",
+        "win_update_manual": "Could not launch PowerShell. Update manually: git pull, then .\\install-windows.ps1",
         # settings dialog
         "dlg_title": "Settings — Claude Usage",
         "dlg_tab_general": "General",
@@ -364,6 +370,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "update_notif_body": "Claude Usage Tab v{ver} está disponible — abre Ajustes ▸ Mantenimiento para instalarla.",
         "update_spawn_fail_title": "No se pudo iniciar la actualización",
         "update_spawn_fail_body": "No se encontró ninguna terminal. Actualiza a mano: git pull y ./install.sh",
+        # windows tray
+        "win_startup": "Iniciar con Windows",
+        "win_update_manual": "No se pudo abrir PowerShell. Actualiza a mano: git pull y .\\install-windows.ps1",
         "dlg_title": "Ajustes — Claude Usage",
         "dlg_tab_general": "General",
         "dlg_tab_topbar": "Barra superior",
@@ -516,6 +525,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "update_notif_body": "Claude Usage Tab v{ver} ist verfügbar — öffne Einstellungen ▸ Wartung, um es zu installieren.",
         "update_spawn_fail_title": "Update konnte nicht gestartet werden",
         "update_spawn_fail_body": "Kein Terminal gefunden. Manuell aktualisieren: git pull, dann ./install.sh",
+        # windows tray
+        "win_startup": "Mit Windows starten",
+        "win_update_manual": "PowerShell konnte nicht gestartet werden. Manuell aktualisieren: git pull, dann .\\install-windows.ps1",
         "dlg_title": "Einstellungen — Claude Usage",
         "dlg_tab_general": "Allgemein",
         "dlg_tab_topbar": "Menüleiste",
@@ -668,6 +680,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "update_notif_body": "Claude Usage Tab v{ver} が利用可能です — 設定 ▸ メンテナンス から更新できます。",
         "update_spawn_fail_title": "アップデートを起動できませんでした",
         "update_spawn_fail_body": "ターミナルが見つかりません。手動で更新してください: git pull 後に ./install.sh",
+        # windows tray
+        "win_startup": "Windows起動時に開始",
+        "win_update_manual": "PowerShell を起動できません。手動で更新してください: git pull 後に .\\install-windows.ps1",
         "dlg_title": "設定 — Claude Usage",
         "dlg_tab_general": "一般",
         "dlg_tab_topbar": "メニューバー",
@@ -820,6 +835,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "update_notif_body": "Claude Usage Tab v{ver} está disponível — abra Configurações ▸ Manutenção para instalar.",
         "update_spawn_fail_title": "Não foi possível iniciar a atualização",
         "update_spawn_fail_body": "Nenhum terminal encontrado. Atualize manualmente: git pull e ./install.sh",
+        # windows tray
+        "win_startup": "Iniciar com o Windows",
+        "win_update_manual": "Não foi possível abrir o PowerShell. Atualize manualmente: git pull e .\\install-windows.ps1",
         "dlg_title": "Configurações — Claude Usage",
         "dlg_tab_general": "Geral",
         "dlg_tab_topbar": "Barra superior",

@@ -1,0 +1,6 @@
+# Python dependencies for the Windows system-tray build.
+# Installed into a local .venv by install-windows.ps1 (Windows has no system
+# PyGObject constraint, so a venv is fine here — unlike the Linux build).
+pystray>=0.19.5   # Shell_NotifyIcon wrapper; pure ctypes on Windows
+Pillow>=9.2       # draws the percentage badge and encodes the .ico
+requests>=2.25

@@ -69,11 +69,14 @@ _RUNNERS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("pnpm", ("dlx", "ccusage@latest")),
 )
 
-# The daemon is usually started by an autostart .desktop entry or a
-# LaunchAgent, which hands it a minimal PATH — none of the per-user Node
-# install locations are on it. Look there ourselves before giving up.
+# The daemon is usually started by an autostart .desktop entry, a LaunchAgent
+# or an HKCU\Run entry, all of which hand it a minimal PATH — none of the
+# per-user Node install locations are on it. Look there ourselves before
+# giving up.
 def _extra_bin_dirs() -> list[Path]:
     home = Path.home()
+    if sys.platform == "win32":
+        return _windows_bin_dirs(home)
     dirs = [
         home / ".bun" / "bin",
         home / ".local" / "bin",
@@ -95,15 +98,45 @@ def _extra_bin_dirs() -> list[Path]:
     return dirs
 
 
+def _windows_bin_dirs(home: Path) -> list[Path]:
+    """Where Node/bun/pnpm actually land on Windows.
+
+    Nothing here is a "bin" directory in the Unix sense: npm's global shims
+    sit in ``%APPDATA%\npm``, the Node installer's own ``npx.cmd`` sits beside
+    ``node.exe`` in Program Files, and pnpm keeps its home under
+    ``%LOCALAPPDATA%``. Empty environment variables are dropped rather than
+    turned into a bare-drive path.
+    """
+    env = {
+        key: os.environ.get(key, "")
+        for key in ("APPDATA", "LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)")
+    }
+    candidates = [
+        home / ".bun" / "bin",
+        Path(env["APPDATA"]) / "npm" if env["APPDATA"] else None,
+        Path(env["LOCALAPPDATA"]) / "pnpm" if env["LOCALAPPDATA"] else None,
+        Path(env["LOCALAPPDATA"]) / "Volta" / "bin" if env["LOCALAPPDATA"] else None,
+        Path(env["ProgramFiles"]) / "nodejs" if env["ProgramFiles"] else None,
+        Path(env["ProgramFiles(x86)"]) / "nodejs" if env["ProgramFiles(x86)"] else None,
+    ]
+    return [c for c in candidates if c is not None]
+
+
 def _locate(name: str) -> Path | None:
-    """Find an executable on PATH, then in the usual per-user Node dirs."""
+    """Find an executable on PATH, then in the usual per-user Node dirs.
+
+    Both passes go through ``shutil.which`` so Windows gets its PATHEXT
+    handling for free: what we look for is ``npx``, what is actually on disk
+    is ``npx.cmd``, and only ``which`` knows to bridge the two.
+    """
     found = shutil.which(name)
     if found:
         return Path(found)
-    for d in _extra_bin_dirs():
-        candidate = d / name
-        if candidate.is_file() and os.access(candidate, os.X_OK):
-            return candidate
+    extra = os.pathsep.join(str(d) for d in _extra_bin_dirs())
+    if extra:
+        found = shutil.which(name, path=extra)
+        if found:
+            return Path(found)
     return None
 
 
@@ -158,9 +191,14 @@ def _run_env(argv: list[str]) -> dict[str, str]:
 
 # The macOS front-end's cost path — worker thread parking a result for a
 # ``rumps.Timer`` to pick up, menu rebuilt around it — has not been run on a
-# real Mac yet. Until it has, the feature stays Linux-only rather than
-# shipping an unexercised path to menu-bar users: no row, no toggle, no
-# subprocess. Flip this to True once it's been exercised on macOS.
+# real Mac yet, and the rest of that build *has* shipped and is stable. Rather
+# than slip an unexercised path into a working app, it stays dark there: no
+# row, no toggle, no subprocess. Flip this to True once it's been exercised on
+# macOS.
+#
+# Windows is deliberately not gated the same way. That whole front-end is new,
+# so singling out one feature inside it would gate nothing in practice — see
+# docs/windows.md, which flags the build as a whole.
 MACOS_READY = False
 
 
