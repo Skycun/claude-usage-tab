@@ -149,6 +149,20 @@ def cached() -> UpdateInfo:
     )
 
 
+def display(version: str | None) -> str:
+    """A release tag as the UI should print it — no leading ``v``.
+
+    ``latest`` is GitHub's ``tag_name`` verbatim (``"v1.3.0"``), while every
+    template already writes its own ``v`` in front of ``{ver}``. Printing the
+    tag raw is where "Update available (vv1.3.0)" comes from, so display sites
+    go through here. ``current_version()`` never carries the prefix, which is
+    why it is unaffected.
+    """
+    if not version:
+        return "?"
+    return version.removeprefix("v").removeprefix("V")
+
+
 def was_notified(version: str | None) -> bool:
     """True if we've already shown a desktop notification for ``version``."""
     return bool(version) and _load_cache().get("notified") == version

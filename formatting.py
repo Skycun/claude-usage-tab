@@ -9,9 +9,31 @@ so it stays portable.
 
 from __future__ import annotations
 
+import math
 from datetime import datetime, timezone
 
 from strings import t
+
+
+def to_float(value: object, default: float = 0.0) -> float:
+    """Coerce an untrusted API value to float, defaulting instead of raising.
+
+    The usage endpoint is undocumented: a utilisation may arrive as a string,
+    as null, or not at all. Every read of one goes through here, because a
+    ``ValueError`` out of a menu render would take the whole poll loop down —
+    the exact failure mode rule 3 in CLAUDE.md exists to prevent.
+
+    NaN and the infinities are rejected too, not just unparseable values.
+    Python's ``json.loads`` accepts the bare ``NaN`` token by default, and a
+    NaN utilisation survives ``float()`` only to explode further downstream
+    where the number meets ``int()`` — in the progress bar, or in the digits
+    drawn on the Windows tray icon.
+    """
+    try:
+        out = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+    return out if math.isfinite(out) else default
 
 
 def format_remaining(reset: datetime | None) -> str:

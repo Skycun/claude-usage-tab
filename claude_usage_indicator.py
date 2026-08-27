@@ -73,6 +73,7 @@ from formatting import (  # noqa: E402
     format_stamp,
     fmt_secs as _fmt_secs,
     progress_bar,
+    to_float,
 )
 import updates  # noqa: E402
 
@@ -528,7 +529,7 @@ class Indicator:
             updates.mark_notified(info.latest)
             self.notify(
                 t("update_notif_title"),
-                t("update_notif_body", ver=info.latest),
+                t("update_notif_body", ver=updates.display(info.latest)),
             )
         self._apply_update_ui()
 
@@ -536,7 +537,9 @@ class Indicator:
         """Show/hide + label the update menu row from ``self.update_info``."""
         info = self.update_info
         if info and info.available and self.settings.update_check_enabled:
-            self.item_update.set_label(t("update_available", ver=info.latest))
+            self.item_update.set_label(
+                t("update_available", ver=updates.display(info.latest))
+            )
             self.item_update.show()
         else:
             self.item_update.hide()
@@ -546,7 +549,7 @@ class Indicator:
 
     def _do_update(self) -> None:
         """Confirm, then run update.sh in a terminal (it restarts the daemon)."""
-        latest = self.update_info.latest if self.update_info else "?"
+        latest = updates.display(self.update_info.latest if self.update_info else None)
         if not self._confirm(
             t("update_confirm_title"),
             t("update_confirm_body", ver=latest),
@@ -922,8 +925,8 @@ class Indicator:
         status = st.get("status")
         if status == "ok" and st.get("data"):
             data = st["data"]
-            five = float((data.get("five_hour") or {}).get("utilization") or 0)
-            seven = float((data.get("seven_day") or {}).get("utilization") or 0)
+            five = to_float((data.get("five_hour") or {}).get("utilization"))
+            seven = to_float((data.get("seven_day") or {}).get("utilization"))
             return t("acct_usage", five=five, seven=seven)
         if status == "rate_limited":
             return t("acct_usage_rl")
@@ -1022,8 +1025,8 @@ class Indicator:
         if claude_state.get("data"):
             five = claude_state["data"].get("five_hour") or {}
             seven = claude_state["data"].get("seven_day") or {}
-            f_util = float(five.get("utilization") or 0)
-            s_util = float(seven.get("utilization") or 0)
+            f_util = to_float(five.get("utilization"))
+            s_util = to_float(seven.get("utilization"))
         icon = pick_icon(f_util, s_util)
         if icon != self.current_icon:
             self.ind.set_icon_full(icon, "Claude usage")
@@ -1074,9 +1077,9 @@ class Indicator:
         sonnet = data.get("seven_day_sonnet") or {}
         extra = data.get("extra_usage") or {}
 
-        f_util = float(five.get("utilization") or 0)
-        s_util = float(seven.get("utilization") or 0)
-        so_util = float(sonnet.get("utilization") or 0)
+        f_util = to_float(five.get("utilization"))
+        s_util = to_float(seven.get("utilization"))
+        so_util = to_float(sonnet.get("utilization"))
         f_reset = parse_iso(five.get("resets_at"))
         s_reset = parse_iso(seven.get("resets_at"))
 
@@ -1127,9 +1130,9 @@ class Indicator:
         five = data.get("five_hour") or {}
         seven = data.get("seven_day") or {}
         sonnet = data.get("seven_day_sonnet") or {}
-        f_util = float(five.get("utilization") or 0)
-        s_util = float(seven.get("utilization") or 0)
-        so_util = float(sonnet.get("utilization") or 0)
+        f_util = to_float(five.get("utilization"))
+        s_util = to_float(seven.get("utilization"))
+        so_util = to_float(sonnet.get("utilization"))
         f_reset = parse_iso(five.get("resets_at"))
         s_reset = parse_iso(seven.get("resets_at"))
 

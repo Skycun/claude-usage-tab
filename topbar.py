@@ -12,6 +12,7 @@ selected metrics.
 
 from __future__ import annotations
 
+from formatting import to_float as _to_float
 from settings import TopbarSettings
 from strings import t
 
@@ -31,19 +32,6 @@ _CLAUDE_METRIC_LABEL_KEYS: dict[str, str] = {
     "seven_day": "weekly_7d",
     "seven_day_sonnet": "sonnet_7d",
 }
-
-
-def _to_float(value: object) -> float:
-    """Coerce an untrusted API value to float, defaulting to 0.
-
-    The usage endpoint is undocumented; a field may arrive as a string,
-    null, or be missing entirely. We never let that raise — a bad value is
-    just 0% rather than a crash that would kill the poll timer.
-    """
-    try:
-        return float(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return 0.0
 
 
 def _pct(value: float, decimals: int) -> str:

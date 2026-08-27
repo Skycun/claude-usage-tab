@@ -42,6 +42,7 @@ from formatting import (
     format_remaining,
     format_stamp,
     progress_bar,
+    to_float,
 )
 from settings import (
     SETTINGS_PATH,
@@ -366,8 +367,8 @@ class ClaudeUsageApp(rumps.App):
         status = st.get("status")
         if status == "ok" and st.get("data"):
             data = st["data"]
-            five = float((data.get("five_hour") or {}).get("utilization") or 0)
-            seven = float((data.get("seven_day") or {}).get("utilization") or 0)
+            five = to_float((data.get("five_hour") or {}).get("utilization"))
+            seven = to_float((data.get("seven_day") or {}).get("utilization"))
             return t("acct_usage", five=five, seven=seven)
         if status == "rate_limited":
             return t("acct_usage_rl")
@@ -425,9 +426,9 @@ class ClaudeUsageApp(rumps.App):
         five = data.get("five_hour") or {}
         seven = data.get("seven_day") or {}
         sonnet = data.get("seven_day_sonnet") or {}
-        f_util = float(five.get("utilization") or 0)
-        s_util = float(seven.get("utilization") or 0)
-        so_util = float(sonnet.get("utilization") or 0)
+        f_util = to_float(five.get("utilization"))
+        s_util = to_float(seven.get("utilization"))
+        so_util = to_float(sonnet.get("utilization"))
         f_reset = parse_iso(five.get("resets_at"))
         s_reset = parse_iso(seven.get("resets_at"))
 
@@ -490,9 +491,9 @@ class ClaudeUsageApp(rumps.App):
         seven = data.get("seven_day") or {}
         sonnet = data.get("seven_day_sonnet") or {}
         extra = data.get("extra_usage") or {}
-        f_util = float(five.get("utilization") or 0)
-        s_util = float(seven.get("utilization") or 0)
-        so_util = float(sonnet.get("utilization") or 0)
+        f_util = to_float(five.get("utilization"))
+        s_util = to_float(seven.get("utilization"))
+        so_util = to_float(sonnet.get("utilization"))
         f_reset = parse_iso(five.get("resets_at"))
         s_reset = parse_iso(seven.get("resets_at"))
 
@@ -561,7 +562,7 @@ class ClaudeUsageApp(rumps.App):
         ):
             m.add(
                 rumps.MenuItem(
-                    t("update_available", ver=self.update_info.latest),
+                    t("update_available", ver=updates.display(self.update_info.latest)),
                     callback=self._on_update,
                 )
             )
@@ -871,7 +872,7 @@ class ClaudeUsageApp(rumps.App):
         )
 
     def _on_update(self, _sender: object = None) -> None:
-        latest = self.update_info.latest if self.update_info else "?"
+        latest = updates.display(self.update_info.latest if self.update_info else None)
         if rumps.alert(
             title=t("update_confirm_title"),
             message=t("update_confirm_body", ver=latest),
@@ -933,7 +934,10 @@ class ClaudeUsageApp(rumps.App):
         self.update_info = info
         if info.available and not updates.was_notified(info.latest):
             updates.mark_notified(info.latest)
-            notify(t("update_notif_title"), t("update_notif_body", ver=info.latest))
+            notify(
+                t("update_notif_title"),
+                t("update_notif_body", ver=updates.display(info.latest)),
+            )
         self._render_menu(self._last_claude_state)
 
 

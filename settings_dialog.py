@@ -19,6 +19,7 @@ from gi.repository import GLib, Gtk
 
 import costs
 import topbar
+import updates
 from settings import (
     MIN_COST_REFRESH_MINUTES,
     SCHEMA_VERSION,
@@ -339,8 +340,7 @@ class SettingsDialog(Gtk.Window):
         return getattr(info, "current", None) or "?"
 
     def _ui_latest(self) -> str:
-        info = self._update_info
-        return getattr(info, "latest", None) or "?"
+        return updates.display(getattr(self._update_info, "latest", None))
 
     def _ui_update_available(self) -> bool:
         return bool(getattr(self._update_info, "available", False))
