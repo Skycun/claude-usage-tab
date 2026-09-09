@@ -81,26 +81,6 @@ def format_account_usage(
     )
 
 
-def format_age(seconds: float | None) -> str:
-    """Human 'how long ago' — the mirror of :func:`format_remaining`.
-
-    Reuses the same duration strings, so a project last opened four days ago
-    reads exactly like a window that resets in four days. A negative age (a
-    clock that moved) is clamped rather than rendered as a future.
-    """
-    if seconds is None:
-        return t("dash")
-    secs = max(0, int(seconds))
-    hours, rem = divmod(secs, 3600)
-    minutes = rem // 60
-    if hours >= 24:
-        days, hours = divmod(hours, 24)
-        return t("duration_days_hours", d=days, h=hours)
-    if hours:
-        return t("duration_hours_minutes", h=hours, m=minutes)
-    return t("duration_minutes", m=minutes)
-
-
 def format_local(reset: datetime | None) -> str:
     """Absolute reset time in the user's locale (for notifications)."""
     if not reset:

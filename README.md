@@ -172,9 +172,9 @@ logs, and the known caveats.
   soon as one of your Claude Code sessions finishes its turn or stops on a
   permission prompt, and stops the moment you answer it. →
   [Terminal attention](#terminal-attention)
-- 🔁 **Switch and carry on** — hit the 5 h limit? Switch to another account
-  and reopen the same conversation in one click, with a guard that stops you
-  switching under a live session. → [Multiple accounts](#multiple-accounts)
+- 🔁 **Switch and carry on** — hit the 5 h limit? One click moves every open
+  terminal to another account, and the app offers it to you the moment you're
+  blocked. → [Multiple accounts](#multiple-accounts)
 - 👥 **Multi-account switcher** — remembers every Claude account you sign
   in as, shows each one's usage, and (opt-in) switches which account
   Claude Code uses next. → [Multiple accounts](#multiple-accounts)
@@ -421,44 +421,31 @@ between them.
 
 ### Switch and carry on
 
-You hit the 5 h limit mid-task. Your other account still has room, but the
-conversation is in this terminal.
+You hit the 5 h limit mid-task and your other account still has room.
 
-Pick the account → **Switch and resume in…** → the project folder. The app
-switches the credentials, opens a terminal in that folder and runs
-`claude --continue`, which picks up the folder's last conversation. Your
-history survives because transcripts are stored per **directory**, not per
-account.
+**The app offers it.** At 100 % on the 5 h window, if another stored account
+is below 90 %, you get a notification and a row at the top of the menu:
+*Limit reached — switch to …*. One click and it's done. No digging through
+submenus at the moment you're blocked.
 
-The folder list comes from the projects you have actually used, most recent
-first, with how long ago each one was open.
+**Your open terminals come with you.** This is the part that makes it worth
+doing: Claude Code re-reads its credentials while it runs, so a switch moves
+the sessions you already have open, not just the next one you start. Nothing
+is relaunched and no window is opened. Your conversation carries on where it
+was, on the other account's quota.
 
-**It offers itself.** When your active account hits 100 % on the 5 h window
-and another one still has room, you get a notification and a row at the top
-of the menu: *Limit reached — switch to … and resume …*. One click. You don't
-have to go digging through submenus at the moment you're blocked.
+Before switching, the app counts the running `claude` processes and tells you
+how many are about to change account. That's information, not a barrier: the
+default answer is yes. If the check can't run, it says so rather than
+pretending nothing is open.
 
-**The guard.** Before any switch, the app looks for running `claude`
-processes and tells you what it found. It does **not** stop you, because the
-resume works either way:
+> This relies on undocumented Claude Code behaviour, the same way the usage
+> figures do. It was verified by observation, not promised by anyone. If a
+> future version pins credentials at startup, the switch would apply to your
+> next launch only.
 
-> A live session keeps its token in memory. It carries on unaffected, and the
-> terminal you're about to open works too. What it can do is rewrite the
-> credentials file when its token expires, leaving the file on the old
-> account, so a *future* launch would start on the wrong one.
-
-So close the old session when convenient, not before clicking. If the check
-itself cannot run, the app says so rather than pretending nothing is running.
-
-**You don't have to quit anything.** Hitting the limit doesn't kill your
-session; it blocks the turn and offers to resume at reset. Leave it. Click
-the offer, a new terminal opens beside it with your conversation, and you
-keep working.
-
-A couple of things worth knowing. The `claude` binary is looked up on `PATH`
-and in the usual install locations, because the daemon starts with a
-stripped `PATH`. And rotating accounts to keep working past a limit is a
-grey area in Anthropic's usage policy, so that call is yours.
+One judgement call is yours: rotating accounts to keep working past a limit
+sits in a grey area of Anthropic's usage policy.
 
 Stored accounts live in `~/.config/claude-usage-indicator/accounts/`
 (`chmod 0600` — they contain OAuth tokens, so treat them like
@@ -536,7 +523,7 @@ costs.py                    # daily API cost via ccusage (opt-in)
 sound.py                    # 80% flourish, all three platforms
 attention.py                # Claude Code hook + flag store (terminal attention)
 attention_hooks.py          # registers those hooks in ~/.claude/settings.json
-handoff.py                  # running-session probe, recent projects, relaunch
+handoff.py                  # running-session probe + when to offer a switch
 trayicon.py                 # Windows: draws the percentage badge (Pillow)
 winshell.py                 # Windows: dialogs, autostart, launching (ctypes)
 install.sh / update.sh / uninstall.sh                  # Linux

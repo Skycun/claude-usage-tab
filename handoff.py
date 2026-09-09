@@ -1,26 +1,27 @@
 #!/usr/bin/env python3
-"""Hand a working session over to another Claude account.
+"""Deciding when to hand the work over to another Claude account.
 
-``accounts.switch_to`` swaps the credentials on disk, which only affects the
-*next* ``claude`` launch. This module supplies the three facts a front-end
-needs to turn that into a usable "switch and carry on here":
+Two facts a front-end needs before offering a switch:
 
-* :func:`running_sessions` — is a ``claude`` process still alive? This is the
-  one that matters, and not for the reason people expect. A live session
-  keeps its access token in memory, so it is unaffected by the swap; but when
-  that token expires the session **refreshes it and writes the result back**
-  to ``~/.claude/.credentials.json``. A switch performed underneath a running
-  session can therefore be undone minutes later, silently, with no error
-  anywhere. Ask before switching, not after.
-* :func:`recent_projects` — the directories worth resuming in, newest first,
-  read straight from the ``projects`` map in ``~/.claude.json`` (each entry
-  carries a ``lastStartTime``). Absolute paths, so nothing has to be decoded
-  back from the transcript directory names, which is lossy.
-* :func:`resume_argv` — how to actually start ``claude --continue``.
-  Transcripts are keyed by working directory, not by account, so a
-  conversation started under one account replays fine under another. The
-  binary is *located* rather than assumed: the daemon is started by an
-  autostart entry with a stripped PATH, the same trap ``costs`` documents.
+* :func:`running_sessions` — how many ``claude`` processes are alive. Not to
+  refuse the switch, but to tell the user what it is about to affect.
+* :func:`pick_offer` — whether there is somewhere worth going, once the
+  active account has run out of five-hour window.
+
+**What a switch actually does, verified rather than assumed.** The obvious
+model is that swapping ``~/.claude/.credentials.json`` only affects the next
+``claude`` launch, and that a running session keeps the token it loaded at
+startup. That is wrong, and it was worth an afternoon to find out: a session
+that was authenticated as one account reported the *other* one in ``/status``
+about forty minutes after the swap, and refreshed that other account's token
+back into the file. Running sessions follow the file. So a switch moves every
+open terminal at once, which is what makes the feature worth having and why
+nothing here launches a replacement terminal.
+
+That behaviour is undocumented, exactly like the usage endpoint this project
+already leans on. Treat it as observed, not guaranteed: if a future Claude
+Code pins its credentials at startup, the switch quietly reverts to
+"next launch only" and the offer becomes less useful, never harmful.
 
 Read-only with respect to ``~/.claude``: this module inspects, it never
 writes. The writing stays in ``accounts.switch_to``.
@@ -33,14 +34,10 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 import sys
-import time
 from dataclasses import dataclass
 from pathlib import Path
-
-CONFIG_PATH = Path.home() / ".claude.json"
 
 # A process is a Claude Code session if its executable is named ``claude``
 # (the native installer drops ``claude.exe`` in ``~/.local/bin``) or if its
@@ -51,8 +48,7 @@ _CLI_MARKERS = (
     "claude\\cli.js",
 )
 # ...but never *us*. The daemon runs as pythonw/python and would not match
-# the rules above anyway; this is belt and braces, and it also spares the
-# hook process during a burst of Stop events.
+# the rules above anyway; this is belt and braces.
 _SELF_MARKERS = ("claude_usage", "claude-usage", "attention.py")
 
 # The probe runs on an explicit click, never on the poll loop, so it can
@@ -60,8 +56,6 @@ _SELF_MARKERS = ("claude_usage", "claude-usage", "attention.py")
 # must not park the worker thread for ever.
 PROBE_TIMEOUT = 15
 _CREATE_NO_WINDOW = 0x08000000
-
-DEFAULT_PROJECT_LIMIT = 6
 
 # When to offer a handoff, and what counts as somewhere worth going. An
 # account already at 90% would buy minutes, not an afternoon, so it is not
@@ -82,34 +76,23 @@ class Probe:
         return self.count > 0
 
     @property
-    def risky(self) -> bool:
-        """True when switching now could be reverted, or we cannot tell."""
+    def notable(self) -> bool:
+        """True when the user deserves a word before we swap under them."""
         return self.busy or not self.known
 
 
 @dataclass(frozen=True)
-class Project:
-    """A directory Claude Code has been run in."""
-
-    path: str
-    name: str
-    last_used: float  # epoch seconds; 0.0 when unknown
-
-
-@dataclass(frozen=True)
 class Offer:
-    """A worthwhile handoff: this account, this folder, right now."""
+    """A worthwhile handoff: this account, right now."""
 
     account_id: str
     email: str
     util: float
-    project: Project
 
 
 def pick_offer(
     active_util: float,
     candidates: "list[tuple[str, str, float]]",
-    project: Project | None,
 ) -> Offer | None:
     """Choose where to send the user when the active account runs dry.
 
@@ -118,13 +101,13 @@ def pick_offer(
     no network of its own. Pure and side-effect free so all three front-ends
     apply one policy instead of three.
     """
-    if active_util < LIMIT_UTIL or project is None:
+    if active_util < LIMIT_UTIL:
         return None
     usable = [c for c in candidates if c[2] < ROOM_UTIL]
     if not usable:
         return None
     account_id, email, util = min(usable, key=lambda c: c[2])
-    return Offer(account_id=account_id, email=email, util=util, project=project)
+    return Offer(account_id=account_id, email=email, util=util)
 
 
 # --------------------------------------------------------------- process probe
@@ -144,8 +127,8 @@ def running_sessions() -> Probe:
     """Count live Claude Code sessions. Never raises.
 
     A failed probe returns ``known=False`` rather than zero: "we could not
-    look" and "nothing is running" must not be confused by the caller, since
-    only one of them is safe to switch under.
+    look" and "nothing is running" are different answers, and the caller
+    words its warning differently for each.
     """
     try:
         if os.name == "nt":
@@ -226,127 +209,10 @@ def _probe_posix() -> Probe:
     return Probe(count)
 
 
-# ------------------------------------------------------------ recent projects
-
-
-def recent_projects(limit: int = DEFAULT_PROJECT_LIMIT) -> tuple[Project, ...]:
-    """Directories Claude Code ran in, most recent first. Never raises.
-
-    Sorted before the directories are stat'ed so a long history costs a
-    handful of filesystem calls, not one per project — some of those paths
-    are on removable or network volumes.
-    """
-    try:
-        raw = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return ()
-    projects = raw.get("projects") if isinstance(raw, dict) else None
-    if not isinstance(projects, dict):
-        return ()
-
-    candidates: list[tuple[float, str]] = []
-    for path, meta in projects.items():
-        if not isinstance(path, str) or not path:
-            continue
-        stamp = 0.0
-        if isinstance(meta, dict):
-            try:
-                stamp = float(meta.get("lastStartTime") or 0.0) / 1000.0
-            except (TypeError, ValueError):
-                stamp = 0.0
-        candidates.append((stamp, path))
-    candidates.sort(reverse=True)
-
-    out: list[Project] = []
-    for stamp, path in candidates[: max(1, limit) * 3]:
-        try:
-            if not Path(path).is_dir():
-                continue
-        except OSError:
-            continue
-        out.append(Project(path=path, name=Path(path).name or path, last_used=stamp))
-        if len(out) >= limit:
-            break
-    return tuple(out)
-
-
-def age_hours(project: Project, now: float | None = None) -> float | None:
-    """Hours since that project was last opened, or ``None`` if unknown."""
-    if not project.last_used:
-        return None
-    return max(0.0, ((now or time.time()) - project.last_used) / 3600.0)
-
-
-# ------------------------------------------------------------- resume command
-
-
-def _extra_bin_dirs() -> list[Path]:
-    """Where the ``claude`` binary lands when PATH does not mention it.
-
-    The native installer uses ``~/.local/bin`` on every platform (that is
-    where ``claude.exe`` sits on Windows); the rest cover npm-global and
-    Homebrew installs. Same stripped-PATH problem ``costs`` documents, but a
-    different set of directories, so the list is not shared.
-    """
-    home = Path.home()
-    dirs = [home / ".local" / "bin", home / ".claude" / "local"]
-    if os.name == "nt":
-        appdata = os.environ.get("APPDATA", "").strip()
-        if appdata:
-            dirs.append(Path(appdata) / "npm")
-    else:
-        dirs += [
-            home / ".bun" / "bin",
-            home / ".npm-global" / "bin",
-            Path("/usr/local/bin"),
-            Path("/opt/homebrew/bin"),
-        ]
-    return dirs
-
-
-def claude_binary() -> Path | None:
-    """Locate the ``claude`` executable, or ``None``.
-
-    ``shutil.which`` both times so Windows applies PATHEXT for us: what we
-    look for is ``claude``, what is on disk may be ``claude.exe`` or a
-    ``.cmd`` shim.
-    """
-    found = shutil.which("claude")
-    if found:
-        return Path(found)
-    extra = os.pathsep.join(str(d) for d in _extra_bin_dirs())
-    if extra:
-        found = shutil.which("claude", path=extra)
-        if found:
-            return Path(found)
-    return None
-
-
-def resume_argv() -> list[str] | None:
-    """Argv that reopens the last conversation of whatever directory it runs in.
-
-    ``--continue`` picks the most recent conversation for the working
-    directory, which is why the caller sets ``cwd`` instead of passing a path
-    here: the transcripts are keyed by directory, not by account, so this is
-    what carries a conversation across a switch.
-    """
-    binary = claude_binary()
-    return [str(binary), "--continue"] if binary else None
-
-
 def main(argv: list[str]) -> int:
-    """CLI: ``probe`` (default), ``projects``, ``binary``."""
-    command = argv[1] if len(argv) > 1 else "probe"
-    if command == "projects":
-        for project in recent_projects(12):
-            age = age_hours(project)
-            when = f"{age:7.1f} h" if age is not None else "      ? "
-            print(f"{when}  {project.path}")
-    elif command == "binary":
-        print(claude_binary() or "not found")
-    else:
-        probe = running_sessions()
-        print(f"sessions={probe.count} known={probe.known} risky={probe.risky}")
+    """CLI: ``probe`` — how many Claude Code sessions are running."""
+    probe = running_sessions()
+    print(f"sessions={probe.count} known={probe.known} notable={probe.notable}")
     return 0
 
 

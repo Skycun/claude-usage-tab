@@ -84,17 +84,12 @@ def open_path(target: str) -> bool:
         return webbrowser.open(target)
 
 
-def spawn(
-    argv: list[str], *, console: bool = False, cwd: str | None = None
-) -> bool:
+def spawn(argv: list[str], *, console: bool = False) -> bool:
     """Launch ``argv`` detached from us. Returns success, never raises.
 
-    ``console`` shows a window (update/uninstall, or an interactive tool the
-    user is meant to type into); without it the child is fully silent, which
-    is what audio playback and other background helpers want. ``cwd`` sets
-    the child's working directory — the way to start an interactive tool *in*
-    a project without building a shell command line and quoting a path into
-    it.
+    ``console`` shows a window (update/uninstall, where the user needs to read
+    the output); without it the child is fully silent, which is what audio
+    playback and other background helpers want.
 
     **``stdin`` follows ``console``, and it is not a detail.** A background
     helper must not inherit stdin, hence ``DEVNULL`` there. But a child given
@@ -102,14 +97,12 @@ def spawn(
     reads end-of-file on its first prompt and exits, which looks exactly like
     a window flashing open and vanishing. Passing ``None`` sets no handles at
     all in ``STARTUPINFO``, so Windows wires the child to the console it just
-    created. This is what makes ``claude --continue`` survive here, and it is
-    also why ``run_script_in_console`` can hold a window open on a
-    ``Read-Host``.
+    created — which is what lets ``run_script_in_console`` actually hold its
+    window open on a ``Read-Host`` instead of closing in the user's face.
     """
     try:
         subprocess.Popen(
             argv,
-            cwd=cwd,
             creationflags=CREATE_NEW_CONSOLE if console else CREATE_NO_WINDOW,
             close_fds=True,
             stdin=None if console else subprocess.DEVNULL,

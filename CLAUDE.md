@@ -29,7 +29,7 @@ formatting.py                # shared pure render helpers (durations, bars, to_f
 sound.py                     # shared 80%-session flourish engine (audio + image, all 3)
 attention.py                 # Claude Code hook + flag store: which terminals want you back
 attention_hooks.py           # registers those hooks in ~/.claude/settings.json (2nd write surface)
-handoff.py                   # is a claude session running, recent projects, how to relaunch it
+handoff.py                   # running-session probe + when a switch is worth offering
 trayicon.py                  # Windows: percentage badge / logo images (Pillow only)
 winshell.py                  # Windows: dialogs, file picker, autostart, launching
 settings_dialog.py           # GTK settings window
@@ -134,33 +134,31 @@ instant a turn ends and two minutes of latency would defeat the point.
 One shell caveat worth remembering: **an icon parked in the notification
 area's overflow chevron cannot be seen blinking.**
 
-Account handoff (``handoff.py``): ``accounts.switch_to`` only affects the
-*next* ``claude`` launch, so "switch and carry on" is a switch plus a
-relaunch. The relaunch is the easy half: transcripts are keyed by working
-directory, not by account, so ``claude --continue`` in the same folder picks
-the conversation back up under the new account. The interesting half is what a
-*running* session does to it. Get the scope of that right, because it is easy
-to overstate: a live session keeps its access token in memory, so the swap
-neither disturbs it nor moves it to the new account, and the terminal we
-launch afterwards works regardless. What a live session can do is refresh its
-token later and *write the result back* to ``.credentials.json``, leaving the
-file pointing at the old account — so a **future** launch starts on the wrong
-one. Annoying, repairable in a click, and not a reason to block. Hence
-``running_sessions``, which every switch path calls first to **warn**, not to
-refuse: a process is a Claude session when its executable is named ``claude``
-(the native installer drops ``claude.exe`` in ``~/.local/bin``) or its
-command line names the npm CLI entry point, and never when it is one of ours.
-A failed probe returns ``known=False``, **not** zero — "we could not look"
-and "nothing is running" must never collapse into the same answer.
-``pick_offer`` holds the other half of the policy: at ``LIMIT_UTIL`` (100%)
-on the five-hour window, offer the stored account with the most room, and
-only if it is under ``ROOM_UTIL`` (90%) — an account already at 92% buys
-minutes, not an afternoon.
-The recent-project list comes from the ``projects`` map of ``~/.claude.json``
-(each entry carries ``lastStartTime``), so no transcript directory name ever
-has to be decoded back into a path, which is lossy. The ``claude`` binary is
-**located, never assumed** — same stripped-PATH trap as ``costs``. This
-module only ever reads ``~/.claude``; the writing stays in ``accounts``.
+Account handoff (``handoff.py``): **a running ``claude`` session follows the
+credentials file.** This was assumed to be false for a long time, including
+by ``accounts.switch_to``'s own docstring, and it cost an afternoon to
+disprove: a session authenticated as one account reported the *other* one in
+``/status`` forty minutes after a swap, and refreshed that other account's
+token back into the file. So a switch moves every open terminal at once.
+There is no relaunching, no ``--continue``, no second window — an earlier
+version of this feature opened one and it was pure noise.
+
+What remains is small. ``running_sessions`` counts live sessions so the
+confirmation can say what the switch is about to affect; it is a heads-up,
+never a gate, and ``known=False`` (the probe could not run) is worded
+differently from zero. A process is a Claude session when its executable is
+named ``claude`` (the native installer drops ``claude.exe`` in
+``~/.local/bin``) or its command line names the npm CLI entry point, and
+never when it is one of ours. ``pick_offer`` holds the policy: at
+``LIMIT_UTIL`` (100%) on the five-hour window, offer the stored account with
+the most room, and only if it is under ``ROOM_UTIL`` (90%) — an account
+already at 92% buys minutes, not an afternoon. The offer surfaces as a
+notification plus a row at the top of the menu, once per limit episode.
+
+The follow-the-file behaviour is **undocumented**, exactly like the usage
+endpoint. Treat it as observed, not guaranteed: if a future Claude Code pins
+its credentials at startup, the switch quietly degrades to "next launch
+only", which makes the feature less useful and never harmful.
 
 Windows tray (``claude_usage_tray.py``): the notification area gives you an
 icon and a tooltip and nothing else, so the **number is drawn into the
@@ -269,12 +267,10 @@ Runtime files (never committed):
    ``~/.claude`` and never writes to it; keep it that way.
 
 8. **Every ``accounts.switch_to`` caller runs ``handoff.running_sessions``
-   first and puts the answer in front of the user.** A live session rewrites
-   ``claudeAiOauth`` when it refreshes its token, which leaves the file on
-   the old account and sends a *future* launch to the wrong place. That is a
-   warning, not a veto: the switch and the relaunch both work regardless, so
-   the dialog's default is to proceed. Treat ``known=False`` the same as
-   busy — never as "all clear".
+   first and puts the answer in front of the user.** A switch is not a local
+   act: open sessions follow the credentials file, so it moves every terminal
+   the user has running. Say how many, then proceed — the default answer is
+   yes. Treat ``known=False`` the same as busy, never as "all clear".
 
 ---
 
@@ -314,9 +310,7 @@ The handoff module is equally inspectable from a shell, and worth checking
 on any machine where the switch misbehaves:
 
 ```bash
-python3 handoff.py probe      # sessions=2 known=True risky=True
-python3 handoff.py projects   # recent directories, newest first
-python3 handoff.py binary     # where 'claude' was found (or "not found")
+python3 handoff.py probe      # sessions=2 known=True notable=True
 ```
 
 ``selftest`` is the one that matters after touching ``command()``: the hook

@@ -284,9 +284,11 @@ def switch_to(acct_id: str, now: datetime) -> bool:
     ``oauthAccount`` in ``~/.claude.json`` — every other key is preserved.
     ``~/.claude.json`` is backed up to ``~/.claude.json.cusi-bak`` first.
 
-    A running ``claude`` session won't switch mid-flight; this only affects
-    the next launch. Returns ``False`` if the target has no usable token or a
-    write fails.
+    Sessions already running **do** follow this: Claude Code re-reads the
+    credentials file while it runs, so a switch moves every open terminal, not
+    only the next launch. That was verified by observation and is undocumented
+    — see ``handoff`` for the caveat. Returns ``False`` if the target has no
+    usable token or a write fails.
     """
     # Never lose the account we're leaving.
     capture(now)

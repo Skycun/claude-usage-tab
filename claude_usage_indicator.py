@@ -71,7 +71,6 @@ from strings import current_lang, detect_lang, set_lang, setup_locale, t  # noqa
 from topbar import compose_label  # noqa: E402
 from formatting import (  # noqa: E402
     format_account_usage,
-    format_age,
     format_cost,
     format_local,
     format_remaining,
@@ -1036,10 +1035,7 @@ class Indicator:
                 for st in account_states
                 if not st.get("active") and st.get("status") == "ok" and st.get("data")
             ]
-            projects = handoff.recent_projects(1)
-            self._offer = handoff.pick_offer(
-                active_util, candidates, projects[0] if projects else None
-            )
+            self._offer = handoff.pick_offer(active_util, candidates)
         else:
             self._offer = None
 
@@ -1050,13 +1046,7 @@ class Indicator:
                 item.hide()
             return
 
-        self.item_offer.set_label(
-            t(
-                "ho_offer_row",
-                email=self._offer.email,
-                project=self._offer.project.name,
-            )
-        )
+        self.item_offer.set_label(t("ho_offer_row", email=self._offer.email))
         for item in self._offer_only:
             item.show()
         if not self._offer_notified:
@@ -1067,14 +1057,13 @@ class Indicator:
                     "ho_offer_body",
                     email=self._offer.email,
                     util=int(self._offer.util),
-                    project=self._offer.project.name,
                 ),
             )
 
     def _on_offer_clicked(self, _item: Gtk.MenuItem) -> None:
         offer = self._offer
         if offer is not None:
-            self._on_switch_resume(offer.account_id, offer.email, offer.project.path)
+            self._on_switch_account(offer.account_id, offer.email)
 
     # -- accounts --------------------------------------------------------
 
@@ -1197,8 +1186,6 @@ class Indicator:
             )
         sub.append(switch_item)
 
-        if not active and self.settings.account_switch_enabled:
-            sub.append(self._build_resume_item(acct.id, email))
 
         forget_item = Gtk.MenuItem(label=t("acct_forget"))
         if active:
@@ -1213,84 +1200,19 @@ class Indicator:
         item.set_submenu(sub)
         return item
 
-    def _build_resume_item(self, acct_id: str, email: str) -> Gtk.MenuItem:
-        """The "switch and carry on in…" submenu of recent project folders."""
-        parent = Gtk.MenuItem(label=t("ho_resume_menu"))
-        sub = Gtk.Menu()
-        projects = handoff.recent_projects()
-        if not projects:
-            empty = Gtk.MenuItem(label=t("ho_no_projects"))
-            empty.set_sensitive(False)
-            sub.append(empty)
-        for project in projects:
-            age = handoff.age_hours(project)
-            label = (
-                t("ho_project_row", name=project.name)
-                if age is None
-                else t("ho_project_age", name=project.name, age=format_age(age * 3600))
-            )
-            row = Gtk.MenuItem(label=label)
-            row.connect(
-                "activate",
-                lambda _i, aid=acct_id, em=email, path=project.path: (
-                    self._on_switch_resume(aid, em, path)
-                ),
-            )
-            sub.append(row)
-        parent.set_submenu(sub)
-        sub.show_all()
-        return parent
-
     def _handoff_cleared(self) -> bool:
         """Ask before switching under a live session.
 
-        A running ``claude`` holds its token in memory, so the swap does not
-        disturb it — but the moment that token expires the session writes its
-        own credentials back and the switch is silently gone. Worth a
-        question, including when the probe itself could not run.
+        Open sessions follow the swap, so this is a heads-up rather than a
+        gate: the user is told how many terminals are about to change
+        account, and the default answer is yes.
         """
         probe = handoff.running_sessions()
-        if not probe.risky:
+        if not probe.notable:
             return True
         body = t("ho_busy_body", n=probe.count) if probe.busy else t("ho_unknown_body")
         question = t("ho_switch_anyway")
         return self._confirm(t("ho_busy_title"), f"{body}\n\n{question} ?")
-
-    def _on_switch_resume(self, acct_id: str, email: str, path: str) -> None:
-        """Switch, then reopen that folder's last conversation in a terminal.
-
-        Order matters: ``claude`` reads the credentials once at launch, so
-        the terminal has to start after the swap, never before.
-        """
-        name = Path(path).name or path
-        if not self._handoff_cleared():
-            return
-        if not self._confirm(
-            t("ho_resume_confirm_title", email=email),
-            t("ho_resume_confirm_body", email=email, project=name),
-        ):
-            return
-        if not accounts.switch_to(acct_id, datetime.now(timezone.utc)):
-            self.notify(
-                t("acct_switch_fail_title"), t("acct_switch_fail_body"), urgent=True
-            )
-            return
-
-        argv = handoff.resume_argv()
-        if argv is None:
-            self.notify(t("ho_no_binary_title"), t("ho_no_binary_body"), urgent=True)
-        elif spawn_terminal(["bash", "-lc", f"cd {shlex.quote(path)} && exec {shlex.quote(argv[0])} --continue"]):
-            self.notify(
-                t("ho_resume_ok_title"),
-                t("ho_resume_ok_body", project=name, email=email),
-            )
-        else:
-            self.notify(
-                t("ho_launch_fail_title"),
-                t("ho_launch_fail_body", project=name),
-                urgent=True,
-            )
-        GLib.idle_add(self._deferred_tick)
 
     def _on_switch_account(self, acct_id: str, email: str) -> None:
         if not self._handoff_cleared():
