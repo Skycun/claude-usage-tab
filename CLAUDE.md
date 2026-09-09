@@ -27,6 +27,8 @@ claude_usage_tray.py         # Windows: pystray tray app (same engine)
 topbar.py                    # top-bar label composition (settings-driven)
 formatting.py                # shared pure render helpers (durations, bars, to_float)
 sound.py                     # shared 80%-session flourish engine (audio + image, all 3)
+attention.py                 # Claude Code hook + flag store: which terminals want you back
+attention_hooks.py           # registers those hooks in ~/.claude/settings.json (2nd write surface)
 trayicon.py                  # Windows: percentage badge / logo images (Pillow only)
 winshell.py                  # Windows: dialogs, file picker, autostart, launching
 settings_dialog.py           # GTK settings window
@@ -110,6 +112,27 @@ never a crash. The figures are an estimate of what that traffic would cost
 on the API (all CLI agents ccusage detects, not just Claude); it is not a
 bill and has nothing to do with the plan limits shown above.
 
+Terminal attention (``attention.py`` + ``attention_hooks.py``): blink the
+icon while a Claude Code terminal has finished its turn or is stuck on a
+permission prompt. **Opt-in** (``attention.enabled``, off by default) and it
+needs hooks registered in ``~/.claude/settings.json`` — see non-negotiable 7
+for the rules that write is held to. Four events are hooked: ``Stop`` flags
+the session as *done*, ``Notification`` as *waiting*, and
+``UserPromptSubmit`` / ``SessionEnd`` clear it. Each writes one small file
+under ``~/.cache/…/attention/``, named by a **sanitised** session id, holding
+the folder's basename and never the path (same hygiene rule as
+``costs.json``). *waiting* outranks *done* everywhere and blinks at half the
+period, because a blocked session is the one that actually costs you time. A
+flag nobody cleared expires after ``attention.expire_minutes`` — a terminal
+killed with ^C never fires ``SessionEnd``. The whole thing is **fail-open**:
+no hooks, no directory, or an unreadable flag means "nothing is waiting",
+never a crash. The blink lives on each front-end's own timer (worker-thread
+deadline on Windows, self-rescheduling ``GLib`` source on GNOME, fixed-beat
+``rumps.Timer`` on macOS) and never on the usage poll — a hook fires the
+instant a turn ends and two minutes of latency would defeat the point.
+One shell caveat worth remembering: **an icon parked in the notification
+area's overflow chevron cannot be seen blinking.**
+
 Windows tray (``claude_usage_tray.py``): the notification area gives you an
 icon and a tooltip and nothing else, so the **number is drawn into the
 icon** (``trayicon.badge``) — one number only, the highest of the selected
@@ -150,7 +173,9 @@ Runtime files (never committed):
 - ``~/.config/claude-usage-indicator/accounts.json`` — token-free account index (email/plan/label)
 - ``~/.config/claude-usage-indicator/accounts/<id>.json`` — per-account credential blob, ``0600``
 - ``~/.cache/claude-usage-indicator/costs.json`` — per-day API cost amounts (``(date, amount)`` only)
+- ``~/.cache/claude-usage-indicator/attention/<session>.json`` — one flag per waiting terminal (``kind``, ``ts``, folder name)
 - ``~/.claude.json.cusi-bak`` — backup written before a switch rewrites ``~/.claude.json``
+- ``~/.claude/settings.json.cusi-bak`` — backup written before the attention hooks are merged in
 - ``%LOCALAPPDATA%/claude-usage-indicator/tray.log`` — Windows only, stderr when there's no console (capped at 1 MB)
 
 ---
@@ -197,11 +222,21 @@ Runtime files (never committed):
 7. **The account store holds several OAuth tokens — guard it like #2.**
    ``accounts/<id>.json`` files are the only place besides ``~/.claude``
    that hold tokens; write them ``0600`` and never log/echo them. The
-   ``account_switch_enabled`` flag gates the *only* code that **writes**
-   into ``~/.claude`` (``accounts.switch_to``): it replaces just
-   ``claudeAiOauth`` / ``oauthAccount``, backs up ``~/.claude.json``
+   ``account_switch_enabled`` flag gates one of the *two* pieces of code
+   that **write** into ``~/.claude`` (``accounts.switch_to``): it replaces
+   just ``claudeAiOauth`` / ``oauthAccount``, backs up ``~/.claude.json``
    first, writes atomically, and only affects the next ``claude`` launch.
-   Never widen that write surface, and never commit the store or backup.
+   Never commit the store or backup.
+
+   **The second write surface is ``attention_hooks``**, and it is the only
+   other one there will be. It touches exactly one key
+   (``hooks``) of ``~/.claude/settings.json``, only ever on an explicit
+   click, after a confirmation, and after backing the file up to
+   ``settings.json.cusi-bak``. The merge is additive (the user's own hooks
+   for the same events are preserved) and the uninstall removes only
+   entries whose command names our own ``attention.py``. Anything that
+   would widen this — writing another key, editing project-level settings,
+   registering a hook that isn't ours — is out of bounds.
 
 ---
 
@@ -223,6 +258,23 @@ tail -f /tmp/claude_usage_indicator.log
 
 There are no unit tests. On Linux the only way to verify is to run the
 daemon and look at the GNOME top bar.
+
+The attention flags need no Claude session to exercise — the hook reads a
+JSON payload on stdin, so you can fire one by hand and watch the front-end
+react:
+
+```bash
+echo '{"hook_event_name":"Stop","session_id":"probe","cwd":"/tmp/demo"}' \
+  | python3 attention.py hook
+python3 attention.py status          # {"waiting": 0, "done": 1, ...}
+python3 attention.py clear
+python3 attention_hooks.py status    # is it registered, and with which command?
+python3 attention_hooks.py selftest  # run the real command through the shell
+```
+
+``selftest`` is the one that matters after touching ``command()``: the hook
+only ever runs inside Claude Code's own shell, so a quoting mistake shows up
+as "the icon never blinks" with nothing in any log to explain it.
 
 The Windows front-end *can* be exercised without Windows, which is how it
 was written — real ``pystray`` on its dummy backend, a fake ``HOME``, a

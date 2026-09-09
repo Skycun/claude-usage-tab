@@ -168,6 +168,10 @@ logs, and the known caveats.
   have cost on the API, plus rolling 7 days and this month, computed
   locally by [ccusage](https://github.com/ryoppippi/ccusage). →
   [API cost](#api-cost)
+- 🔴 **Blink when a terminal wants you** *(opt-in)* — the icon pulses as
+  soon as one of your Claude Code sessions finishes its turn or stops on a
+  permission prompt, and stops the moment you answer it. →
+  [Terminal attention](#terminal-attention)
 - 👥 **Multi-account switcher** — remembers every Claude account you sign
   in as, shows each one's usage, and (opt-in) switches which account
   Claude Code uses next. → [Multiple accounts](#multiple-accounts)
@@ -344,6 +348,50 @@ wrapper script…).
 
 ---
 
+## Terminal attention
+
+When you run Claude Code in several terminals, the one that finished three
+minutes ago is invisible until you go looking. Turn this on and the icon
+blinks instead.
+
+**Two states, told apart on sight:**
+
+| What happened | Colour (Windows) | Marker (GNOME / macOS) | Rhythm |
+|---|---|---|---|
+| A session is waiting for an answer — a permission prompt, or a minute of silence | blue | `!` | fast |
+| A session finished its turn | green | `*` | half as fast |
+
+Waiting always wins: it is the state that is actually blocking work.
+
+**Turning it on**
+
+1. Open **Options ▸ Claude terminals** (the settings window on Linux).
+2. Click **Install the Claude Code hooks**, and confirm.
+3. Tick **Blink when a terminal wants me**.
+
+**What the hooks do**
+
+The blink is fed by four Claude Code hooks added to
+`~/.claude/settings.json`: `Stop` and `Notification` raise a flag for the
+session, `UserPromptSubmit` and `SessionEnd` clear it. So the blink stops on
+its own the moment you type your next prompt in that terminal — you never
+have to dismiss it. The dropdown lists which project each waiting terminal
+belongs to, with a **Stop blinking** row if you want to silence them all.
+
+**Good to know**
+
+- Your existing hooks are left alone. The merge is additive, and the file is
+  backed up to `settings.json.cusi-bak` first. **Remove the Claude Code
+  hooks** takes out only the entries this app added.
+- **On Windows, an icon hidden in the overflow chevron can't be seen
+  blinking.** Drag it onto the taskbar first.
+- Flags live in `~/.cache/claude-usage-indicator/attention/` and hold the
+  project folder's name, never its path. A flag nothing cleared (a terminal
+  killed outright) expires after an hour.
+- No hooks installed means no flags, which means no blink — never an error.
+
+---
+
 ## Multiple accounts
 
 Claude Code only stores **one** active account at a time — signing in as
@@ -440,6 +488,8 @@ alerts.py                   # usage history + custom-alert engine
 updates.py / version.py     # GitHub release check + version
 costs.py                    # daily API cost via ccusage (opt-in)
 sound.py                    # 80% flourish, all three platforms
+attention.py                # Claude Code hook + flag store (terminal attention)
+attention_hooks.py          # registers those hooks in ~/.claude/settings.json
 trayicon.py                 # Windows: draws the percentage badge (Pillow)
 winshell.py                 # Windows: dialogs, autostart, launching (ctypes)
 install.sh / update.sh / uninstall.sh                  # Linux

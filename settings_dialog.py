@@ -17,12 +17,16 @@ from typing import Callable
 
 from gi.repository import GLib, Gtk
 
+import attention_hooks
 import costs
 import topbar
 import updates
 from settings import (
+    MAX_BLINK_MS,
+    MIN_BLINK_MS,
     MIN_COST_REFRESH_MINUTES,
     SCHEMA_VERSION,
+    AttentionSettings,
     CostSettings,
     Settings,
     SoundSettings,
@@ -174,7 +178,65 @@ class SettingsDialog(Gtk.Window):
         grid.attach(self._dim(detected), 1, row, 1, 1)
         row += 1
         grid.attach(self._dim(t("dlg_cost_hint")), 1, row, 1, 1)
+        row += 1
+
+        # --- terminal attention blink ---
+        grid.attach(
+            Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), 0, row, 2, 1
+        )
+        row += 1
+        grid.attach(self._label(t("dlg_att_section")), 0, row, 2, 1)
+        row += 1
+
+        att = self.settings.attention
+        self.chk_att_enabled = self._check(t("dlg_att_enabled"), att.enabled)
+        grid.attach(self.chk_att_enabled, 0, row, 2, 1)
+        row += 1
+
+        grid.attach(self._label(t("dlg_att_blink_ms")), 0, row, 1, 1)
+        self.spin_att_blink = Gtk.SpinButton.new_with_range(
+            MIN_BLINK_MS, MAX_BLINK_MS, 50
+        )
+        self.spin_att_blink.set_value(att.blink_ms)
+        grid.attach(self.spin_att_blink, 1, row, 1, 1)
+        row += 1
+
+        # The blink is fed by Claude Code hooks; without them the checkbox
+        # above would silently do nothing, so the state and the button that
+        # fixes it sit right underneath it.
+        self.lbl_att_hooks = self._dim("")
+        grid.attach(self.lbl_att_hooks, 1, row, 1, 1)
+        row += 1
+        self.btn_att_hooks = Gtk.Button()
+        self.btn_att_hooks.connect("clicked", self._on_toggle_hooks)
+        grid.attach(self.btn_att_hooks, 1, row, 1, 1)
+        self._refresh_hook_row()
+        row += 1
+        grid.attach(self._dim(t("dlg_att_hint")), 1, row, 1, 1)
         return grid
+
+    def _refresh_hook_row(self) -> None:
+        """Point the hook status line and button at the current reality."""
+        installed = attention_hooks.installed()
+        self.lbl_att_hooks.set_text(
+            t("dlg_att_hooks_ok") if installed else t("dlg_att_hooks_missing")
+        )
+        self.btn_att_hooks.set_label(
+            t("dlg_att_hooks_remove") if installed else t("dlg_att_hooks_install")
+        )
+
+    def _on_toggle_hooks(self, _btn: Gtk.Button) -> None:
+        if attention_hooks.installed():
+            result = attention_hooks.uninstall()
+        else:
+            if not self._confirm(
+                t("dlg_att_hooks_confirm_title"), t("dlg_att_hooks_confirm_body")
+            ):
+                return
+            result = attention_hooks.install()
+        if not result.ok:
+            self._error(t("dlg_att_section"), t("dlg_att_hooks_failed", err=result.detail))
+        self._refresh_hook_row()
 
     # ------------------------------------------------------------- tab: top-bar
 
@@ -544,6 +606,13 @@ class SettingsDialog(Gtk.Window):
             refresh_minutes=int(self.spin_cost_refresh.get_value()),
         )
 
+    def _collect_attention(self) -> AttentionSettings:
+        return AttentionSettings(
+            enabled=self.chk_att_enabled.get_active(),
+            blink_ms=int(self.spin_att_blink.get_value()),
+            expire_minutes=self.settings.attention.expire_minutes,
+        )
+
     def _collect_thresholds(self) -> tuple[int, ...]:
         out: list[int] = []
         for part in self.ent_thresholds.get_text().split(","):
@@ -572,6 +641,7 @@ class SettingsDialog(Gtk.Window):
             account_switch_enabled=self.chk_account_switch.get_active(),
             sound=self._collect_sound(),
             cost=self._collect_cost(),
+            attention=self._collect_attention(),
             topbar=self._collect_topbar(),
         )
 
@@ -598,6 +668,20 @@ class SettingsDialog(Gtk.Window):
         # the user can no longer reopen.
         self.destroy()
         self._on_save()
+
+    def _confirm(self, title: str, detail: str) -> bool:
+        """Modal yes/no. Used before anything that writes outside our config."""
+        dlg = Gtk.MessageDialog(
+            transient_for=self,
+            modal=True,
+            message_type=Gtk.MessageType.QUESTION,
+            buttons=Gtk.ButtonsType.OK_CANCEL,
+            text=title,
+        )
+        dlg.format_secondary_text(detail)
+        answer = dlg.run()
+        dlg.destroy()
+        return answer == Gtk.ResponseType.OK
 
     def _error(self, title: str, detail: str) -> None:
         dlg = Gtk.MessageDialog(
