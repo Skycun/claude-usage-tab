@@ -172,6 +172,9 @@ logs, and the known caveats.
   soon as one of your Claude Code sessions finishes its turn or stops on a
   permission prompt, and stops the moment you answer it. →
   [Terminal attention](#terminal-attention)
+- 🔁 **Switch and carry on** — hit the 5 h limit? Switch to another account
+  and reopen the same conversation in one click, with a guard that stops you
+  switching under a live session. → [Multiple accounts](#multiple-accounts)
 - 👥 **Multi-account switcher** — remembers every Claude account you sign
   in as, shows each one's usage, and (opt-in) switches which account
   Claude Code uses next. → [Multiple accounts](#multiple-accounts)
@@ -414,6 +417,36 @@ between them.
 > Switching takes effect on the **next** `claude` launch — a running
 > session won't switch mid-flight.
 
+### Switch and carry on
+
+You hit the 5 h limit mid-task. Your other account still has room, but the
+conversation is in this terminal.
+
+Pick the account → **Switch and resume in…** → the project folder. The app
+switches the credentials, opens a terminal in that folder and runs
+`claude --continue`, which picks up the folder's last conversation. Your
+history survives because transcripts are stored per **directory**, not per
+account.
+
+The folder list comes from the projects you have actually used, most recent
+first, with how long ago each one was open.
+
+**The guard.** Before any switch, with or without a resume, the app looks
+for running `claude` processes and stops if it finds one:
+
+> A live session keeps its token in memory, so the swap doesn't disturb it.
+> But when that token expires the session **rewrites the credentials file**,
+> and your switch is gone, minutes later, with no error anywhere.
+
+So close the session you're leaving first. If you know what you're doing you
+can still choose **Switch anyway**. If the check itself cannot run, the app
+says so rather than pretending nothing is running.
+
+A couple of things worth knowing. The `claude` binary is looked up on `PATH`
+and in the usual install locations, because the daemon starts with a
+stripped `PATH`. And rotating accounts to keep working past a limit is a
+grey area in Anthropic's usage policy, so that call is yours.
+
 Stored accounts live in `~/.config/claude-usage-indicator/accounts/`
 (`chmod 0600` — they contain OAuth tokens, so treat them like
 `~/.claude/.credentials.json`). Remove one with **Forget this account**.
@@ -490,6 +523,7 @@ costs.py                    # daily API cost via ccusage (opt-in)
 sound.py                    # 80% flourish, all three platforms
 attention.py                # Claude Code hook + flag store (terminal attention)
 attention_hooks.py          # registers those hooks in ~/.claude/settings.json
+handoff.py                  # running-session probe, recent projects, relaunch
 trayicon.py                 # Windows: draws the percentage badge (Pillow)
 winshell.py                 # Windows: dialogs, autostart, launching (ctypes)
 install.sh / update.sh / uninstall.sh                  # Linux

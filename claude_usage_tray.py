@@ -48,6 +48,7 @@ import accounts
 import attention
 import attention_hooks
 import costs
+import handoff
 import sound
 import trayicon
 import updates
@@ -56,6 +57,7 @@ from alerts import History, evaluate_alerts
 from api import fetch_usage, parse_iso, read_account, read_token
 from formatting import (
     fmt_secs,
+    format_age,
     format_cost,
     format_local,
     format_remaining,
@@ -874,6 +876,12 @@ class TrayApp:
                 rows.append(
                     MenuItem(t("acct_switch"), self._queued(self._on_switch, acct.id, email))
                 )
+                rows.append(
+                    MenuItem(
+                        t("ho_resume_menu"),
+                        Menu(*self._resume_items(acct.id, email)),
+                    )
+                )
             if not active:
                 rows.append(
                     MenuItem(t("acct_forget"), self._queued(self._on_forget, acct.id, email))
@@ -881,6 +889,33 @@ class TrayApp:
             yield MenuItem(
                 f"{mark} {email}{plan}  —  {self._account_usage_text(st)}",
                 Menu(*rows),
+            )
+
+    def _resume_items(self, acct_id: str, email: str):
+        """Recent project directories to reopen the conversation in.
+
+        Built on the message-loop thread like the rest of the menu, so it
+        stays a single JSON read plus a handful of ``is_dir`` calls. The
+        process probe, which is expensive, waits until the click.
+        """
+        projects = handoff.recent_projects()
+        if not projects:
+            yield MenuItem(t("ho_no_projects"), None, enabled=False)
+            return
+        for project in projects:
+            age = handoff.age_hours(project)
+            label = (
+                t("ho_project_row", name=project.name)
+                if age is None
+                else t(
+                    "ho_project_age",
+                    name=project.name,
+                    age=format_age(age * 3600),
+                )
+            )
+            yield MenuItem(
+                label,
+                self._queued(self._on_switch_resume, acct_id, email, project.path),
             )
 
     # -- API cost (ccusage) ------------------------------------------------
@@ -1246,7 +1281,28 @@ class TrayApp:
         if not winshell.run_script_in_console(INSTALL_DIR / UPDATE_SCRIPT):
             self.notify(t("update_spawn_fail_title"), t("win_update_manual"))
 
+    def _handoff_cleared(self) -> bool:
+        """Ask before switching under a live session. Worker thread only.
+
+        A running ``claude`` keeps its token in memory, so the swap does not
+        disturb it — but when that token expires the session writes its own
+        credentials back and the switch is gone, with nothing to show for it.
+        Hence a real question rather than a silent proceed, and the same
+        question when the probe itself could not run.
+        """
+        probe = handoff.running_sessions()
+        if not probe.risky:
+            return True
+        body = (
+            t("ho_busy_body", n=probe.count)
+            if probe.busy
+            else t("ho_unknown_body")
+        )
+        return winshell.confirm(t("ho_busy_title"), f"{body}\n\n{t('ho_switch_anyway')} ?")
+
     def _on_switch(self, acct_id: str, email: str) -> bool:
+        if not self._handoff_cleared():
+            return False
         if not winshell.confirm(
             t("acct_switch_confirm_title"), t("acct_switch_confirm_body", email=email)
         ):
@@ -1255,6 +1311,39 @@ class TrayApp:
             self.notify(t("acct_switch_ok_title"), t("acct_switch_ok_body", email=email))
         else:
             self.notify(t("acct_switch_fail_title"), t("acct_switch_fail_body"))
+        return True
+
+    def _on_switch_resume(self, acct_id: str, email: str, path: str) -> bool:
+        """Switch account, then reopen that folder's last conversation.
+
+        The order matters: the terminal must start *after* the credentials
+        are in place, because ``claude`` reads them once at launch.
+        """
+        name = Path(path).name or path
+        if not self._handoff_cleared():
+            return False
+        if not winshell.confirm(
+            t("ho_resume_confirm_title", email=email),
+            t("ho_resume_confirm_body", email=email, project=name),
+        ):
+            return False
+
+        if not accounts.switch_to(acct_id, datetime.now(timezone.utc)):
+            self.notify(t("acct_switch_fail_title"), t("acct_switch_fail_body"))
+            return True
+
+        argv = handoff.resume_argv()
+        if argv is None:
+            self.notify(t("ho_no_binary_title"), t("ho_no_binary_body"))
+        elif winshell.spawn(argv, console=True, cwd=path):
+            self.notify(
+                t("ho_resume_ok_title"),
+                t("ho_resume_ok_body", project=name, email=email),
+            )
+        else:
+            self.notify(
+                t("ho_launch_fail_title"), t("ho_launch_fail_body", project=name)
+            )
         return True
 
     def _on_forget(self, acct_id: str, email: str) -> bool:

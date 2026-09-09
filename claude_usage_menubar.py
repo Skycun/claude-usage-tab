@@ -34,12 +34,14 @@ import accounts
 import attention
 import attention_hooks
 import costs
+import handoff
 import sound
 import updates
 from alerts import History, evaluate_alerts
 from api import fetch_usage, parse_iso, read_account, read_token
 from formatting import (
     fmt_secs,
+    format_age,
     format_cost,
     format_local,
     format_remaining,
@@ -792,6 +794,32 @@ class ClaudeUsageApp(rumps.App):
                     callback=lambda _s, aid=acct.id, em=email: self._on_switch(aid, em),
                 )
             )
+            resume = rumps.MenuItem(t("ho_resume_menu"))
+            projects = handoff.recent_projects()
+            if not projects:
+                resume.add(rumps.MenuItem(t("ho_no_projects")))
+            for project in projects:
+                age = handoff.age_hours(project)
+                label = (
+                    t("ho_project_row", name=project.name)
+                    if age is None
+                    else t(
+                        "ho_project_age",
+                        name=project.name,
+                        age=format_age(age * 3600),
+                    )
+                )
+                resume.add(
+                    rumps.MenuItem(
+                        label,
+                        callback=(
+                            lambda _s, aid=acct.id, em=email, p=project.path: (
+                                self._on_switch_resume(aid, em, p)
+                            )
+                        ),
+                    )
+                )
+            item.add(resume)
         if not active:
             item.add(
                 rumps.MenuItem(
@@ -1072,7 +1100,65 @@ class ClaudeUsageApp(rumps.App):
         if not open_terminal(cmd):
             notify(t("update_spawn_fail_title"), t("update_spawn_fail_body"))
 
+    def _handoff_cleared(self) -> bool:
+        """Ask before switching under a live session.
+
+        A running ``claude`` holds its token in memory, so the swap does not
+        disturb it — but when that token expires the session writes its own
+        credentials back and the switch is silently gone. Worth a question,
+        including when the probe itself could not run.
+        """
+        probe = handoff.running_sessions()
+        if not probe.risky:
+            return True
+        body = t("ho_busy_body", n=probe.count) if probe.busy else t("ho_unknown_body")
+        return (
+            rumps.alert(
+                title=t("ho_busy_title"),
+                message=body,
+                ok=t("ho_switch_anyway"),
+                cancel=t("dlg_cancel"),
+            )
+            == 1
+        )
+
+    def _on_switch_resume(self, acct_id: str, email: str, path: str) -> None:
+        """Switch, then reopen that folder's last conversation in Terminal.
+
+        Order matters: ``claude`` reads the credentials once at launch, so
+        the terminal has to start after the swap, never before.
+        """
+        name = Path(path).name or path
+        if not self._handoff_cleared():
+            return
+        if rumps.alert(
+            title=t("ho_resume_confirm_title", email=email),
+            message=t("ho_resume_confirm_body", email=email, project=name),
+            ok=t("acct_switch"),
+            cancel=t("dlg_cancel"),
+        ) != 1:
+            return
+        if not accounts.switch_to(acct_id, datetime.now(timezone.utc)):
+            notify(t("acct_switch_fail_title"), t("acct_switch_fail_body"))
+            return
+
+        argv = handoff.resume_argv()
+        if argv is None:
+            notify(t("ho_no_binary_title"), t("ho_no_binary_body"))
+        elif open_terminal(
+            f"cd {shlex.quote(path)} && exec {shlex.quote(argv[0])} --continue"
+        ):
+            notify(
+                t("ho_resume_ok_title"),
+                t("ho_resume_ok_body", project=name, email=email),
+            )
+        else:
+            notify(t("ho_launch_fail_title"), t("ho_launch_fail_body", project=name))
+        self._defer(self._tick)
+
     def _on_switch(self, acct_id: str, email: str) -> None:
+        if not self._handoff_cleared():
+            return
         if rumps.alert(
             title=t("acct_switch_confirm_title"),
             message=t("acct_switch_confirm_body", email=email),

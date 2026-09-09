@@ -29,6 +29,7 @@ formatting.py                # shared pure render helpers (durations, bars, to_f
 sound.py                     # shared 80%-session flourish engine (audio + image, all 3)
 attention.py                 # Claude Code hook + flag store: which terminals want you back
 attention_hooks.py           # registers those hooks in ~/.claude/settings.json (2nd write surface)
+handoff.py                   # is a claude session running, recent projects, how to relaunch it
 trayicon.py                  # Windows: percentage badge / logo images (Pillow only)
 winshell.py                  # Windows: dialogs, file picker, autostart, launching
 settings_dialog.py           # GTK settings window
@@ -133,6 +134,27 @@ instant a turn ends and two minutes of latency would defeat the point.
 One shell caveat worth remembering: **an icon parked in the notification
 area's overflow chevron cannot be seen blinking.**
 
+Account handoff (``handoff.py``): ``accounts.switch_to`` only affects the
+*next* ``claude`` launch, so "switch and carry on" is a switch plus a
+relaunch. The relaunch is the easy half: transcripts are keyed by working
+directory, not by account, so ``claude --continue`` in the same folder picks
+the conversation back up under the new account. The **hard half is knowing
+when it is safe to switch at all**. A live session keeps its access token in
+memory and is unbothered by the swap, but when that token expires it
+refreshes it and *writes the result back* to ``.credentials.json`` — undoing
+the switch minutes later, silently, with nothing in any log. Hence
+``running_sessions``, which every switch path calls first: a process is a
+Claude session when its executable is named ``claude`` (the native installer
+drops ``claude.exe`` in ``~/.local/bin``) or its command line names the npm
+CLI entry point, and never when it is one of ours. A failed probe returns
+``known=False``, **not** zero — "we could not look" and "nothing is running"
+must never collapse into the same answer, because only one of them is safe.
+The recent-project list comes from the ``projects`` map of ``~/.claude.json``
+(each entry carries ``lastStartTime``), so no transcript directory name ever
+has to be decoded back into a path, which is lossy. The ``claude`` binary is
+**located, never assumed** — same stripped-PATH trap as ``costs``. This
+module only ever reads ``~/.claude``; the writing stays in ``accounts``.
+
 Windows tray (``claude_usage_tray.py``): the notification area gives you an
 icon and a tooltip and nothing else, so the **number is drawn into the
 icon** (``trayicon.badge``) — one number only, the highest of the selected
@@ -236,7 +258,14 @@ Runtime files (never committed):
    for the same events are preserved) and the uninstall removes only
    entries whose command names our own ``attention.py``. Anything that
    would widen this — writing another key, editing project-level settings,
-   registering a hook that isn't ours — is out of bounds.
+   registering a hook that isn't ours — is out of bounds. ``handoff`` reads
+   ``~/.claude`` and never writes to it; keep it that way.
+
+8. **Never switch accounts under a running ``claude``.** A live session
+   rewrites ``claudeAiOauth`` when it refreshes its token, which reverts the
+   switch with no error anywhere. Every path that calls
+   ``accounts.switch_to`` must run ``handoff.running_sessions`` first and put
+   the answer in front of the user. Treat ``known=False`` as risky.
 
 ---
 
@@ -270,6 +299,15 @@ python3 attention.py status          # {"waiting": 0, "done": 1, ...}
 python3 attention.py clear
 python3 attention_hooks.py status    # is it registered, and with which command?
 python3 attention_hooks.py selftest  # run the real command through the shell
+```
+
+The handoff module is equally inspectable from a shell, and worth checking
+on any machine where the switch misbehaves:
+
+```bash
+python3 handoff.py probe      # sessions=2 known=True risky=True
+python3 handoff.py projects   # recent directories, newest first
+python3 handoff.py binary     # where 'claude' was found (or "not found")
 ```
 
 ``selftest`` is the one that matters after touching ``command()``: the hook

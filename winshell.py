@@ -84,16 +84,21 @@ def open_path(target: str) -> bool:
         return webbrowser.open(target)
 
 
-def spawn(argv: list[str], *, console: bool = False) -> bool:
+def spawn(
+    argv: list[str], *, console: bool = False, cwd: str | None = None
+) -> bool:
     """Launch ``argv`` detached from us. Returns success, never raises.
 
     ``console`` shows a window (update/uninstall, where the user needs to read
     the output); without it the child is fully silent, which is what audio
-    playback and other background helpers want.
+    playback and other background helpers want. ``cwd`` sets the child's
+    working directory — the way to start an interactive tool *in* a project
+    without building a shell command line and quoting a path into it.
     """
     try:
         subprocess.Popen(
             argv,
+            cwd=cwd,
             creationflags=CREATE_NEW_CONSOLE if console else CREATE_NO_WINDOW,
             close_fds=True,
             stdin=subprocess.DEVNULL,
