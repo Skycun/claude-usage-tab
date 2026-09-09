@@ -277,7 +277,7 @@ def refresh(acct_id: str) -> str | None:
 
 
 def switch_to(acct_id: str, now: datetime) -> bool:
-    """Make ``acct_id`` the active account for the *next* ``claude`` launch.
+    """Make ``acct_id`` the active account, in every terminal at once.
 
     Snapshots the current active account first (so nothing is lost), then
     replaces ``claudeAiOauth`` in ``~/.claude/.credentials.json`` and

@@ -71,15 +71,6 @@ class Probe:
     count: int = 0
     known: bool = True
 
-    @property
-    def busy(self) -> bool:
-        return self.count > 0
-
-    @property
-    def notable(self) -> bool:
-        """True when the user deserves a word before we swap under them."""
-        return self.busy or not self.known
-
 
 @dataclass(frozen=True)
 class Offer:
@@ -127,8 +118,8 @@ def running_sessions() -> Probe:
     """Count live Claude Code sessions. Never raises.
 
     A failed probe returns ``known=False`` rather than zero: "we could not
-    look" and "nothing is running" are different answers, and the caller
-    words its warning differently for each.
+    look" and "nothing is running" are different answers, and the sentence
+    the confirmation shows is worded differently for each.
     """
     try:
         if os.name == "nt":
@@ -212,7 +203,7 @@ def _probe_posix() -> Probe:
 def main(argv: list[str]) -> int:
     """CLI: ``probe`` — how many Claude Code sessions are running."""
     probe = running_sessions()
-    print(f"sessions={probe.count} known={probe.known} notable={probe.notable}")
+    print(f"sessions={probe.count} known={probe.known}")
     return 0
 
 

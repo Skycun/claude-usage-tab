@@ -46,6 +46,7 @@ from formatting import (
     format_local,
     format_remaining,
     format_stamp,
+    format_switch_confirm,
     progress_bar,
     to_float,
 )
@@ -1144,33 +1145,19 @@ class ClaudeUsageApp(rumps.App):
         if not open_terminal(cmd):
             notify(t("update_spawn_fail_title"), t("update_spawn_fail_body"))
 
-    def _handoff_cleared(self) -> bool:
-        """Ask before switching under a live session.
+    def _on_switch(self, acct_id: str, email: str) -> None:
+        """Confirm once, then swap.
 
-        Open sessions follow the swap, so this is a heads-up rather than a
-        gate: the user is told how many terminals are about to change
-        account, and the default answer is yes.
+        The running-session count rides inside the confirmation body
+        (non-negotiable 8): it says what the switch is about to move, and
+        the default answer is yes. Open terminals follow the credentials
+        file, which is the point of the feature, not a hazard, so it does
+        not deserve a warning of its own.
         """
         probe = handoff.running_sessions()
-        if not probe.notable:
-            return True
-        body = t("ho_busy_body", n=probe.count) if probe.busy else t("ho_unknown_body")
-        return (
-            rumps.alert(
-                title=t("ho_busy_title"),
-                message=body,
-                ok=t("ho_switch_anyway"),
-                cancel=t("dlg_cancel"),
-            )
-            == 1
-        )
-
-    def _on_switch(self, acct_id: str, email: str) -> None:
-        if not self._handoff_cleared():
-            return
         if rumps.alert(
             title=t("acct_switch_confirm_title"),
-            message=t("acct_switch_confirm_body", email=email),
+            message=format_switch_confirm(email, probe.count, probe.known),
             ok=t("acct_switch"),
             cancel=t("dlg_cancel"),
         ) != 1:

@@ -146,7 +146,10 @@ version of this feature opened one and it was pure noise.
 What remains is small. ``running_sessions`` counts live sessions so the
 confirmation can say what the switch is about to affect; it is a heads-up,
 never a gate, and ``known=False`` (the probe could not run) is worded
-differently from zero. A process is a Claude session when its executable is
+differently from zero. It rides inside **one** confirmation dialog
+(``formatting.format_switch_confirm``), not a warning of its own: terminals
+following the swap is the feature, and an earlier version that said the
+opposite — "a running session will not switch live" — was simply wrong. A process is a Claude session when its executable is
 named ``claude`` (the native installer drops ``claude.exe`` in
 ``~/.local/bin``) or its command line names the npm CLI entry point, and
 never when it is one of ours. ``pick_offer`` holds the policy: at
@@ -261,7 +264,8 @@ Runtime files (never committed):
    ``account_switch_enabled`` flag gates one of the *two* pieces of code
    that **write** into ``~/.claude`` (``accounts.switch_to``): it replaces
    just ``claudeAiOauth`` / ``oauthAccount``, backs up ``~/.claude.json``
-   first, writes atomically, and only affects the next ``claude`` launch.
+   first, and writes atomically. It takes effect in every open terminal,
+   not only at the next ``claude`` launch — see non-negotiable 8.
    Never commit the store or backup.
 
    **The second write surface is ``attention_hooks``**, and it is the only
@@ -278,8 +282,10 @@ Runtime files (never committed):
 8. **Every ``accounts.switch_to`` caller runs ``handoff.running_sessions``
    first and puts the answer in front of the user.** A switch is not a local
    act: open sessions follow the credentials file, so it moves every terminal
-   the user has running. Say how many, then proceed — the default answer is
-   yes. Treat ``known=False`` the same as busy, never as "all clear".
+   the user has running. Say how many in the confirmation itself, then
+   proceed — the default answer is yes. Treat ``known=False`` the same as
+   busy, never as "all clear". No string anywhere may claim the switch waits
+   for the next launch.
 
 ---
 
@@ -319,7 +325,7 @@ The handoff module is equally inspectable from a shell, and worth checking
 on any machine where the switch misbehaves:
 
 ```bash
-python3 handoff.py probe      # sessions=2 known=True notable=True
+python3 handoff.py probe      # sessions=2 known=True
 ```
 
 ``selftest`` is the one that matters after touching ``command()``: the hook

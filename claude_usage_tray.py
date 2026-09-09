@@ -62,6 +62,7 @@ from formatting import (
     format_local,
     format_remaining,
     format_stamp,
+    format_switch_confirm,
     progress_bar,
     to_float,
 )
@@ -1311,29 +1312,19 @@ class TrayApp:
         if not winshell.run_script_in_console(INSTALL_DIR / UPDATE_SCRIPT):
             self.notify(t("update_spawn_fail_title"), t("win_update_manual"))
 
-    def _handoff_cleared(self) -> bool:
-        """Say what the switch is about to affect. Worker thread only.
+    def _on_switch(self, acct_id: str, email: str) -> bool:
+        """Confirm once, then swap. Worker thread only.
 
-        Open sessions follow the swap, so this is a heads-up rather than a
-        gate: the user is told how many terminals are about to change
-        account, and the default answer is yes. Same question when the probe
-        could not run, worded for the uncertainty.
+        The running-session count rides inside the confirmation body
+        (non-negotiable 8): it says what the switch is about to move, and
+        the default answer is yes. Open terminals follow the credentials
+        file, which is the point of the feature, not a hazard, so it does
+        not deserve a warning of its own.
         """
         probe = handoff.running_sessions()
-        if not probe.notable:
-            return True
-        body = (
-            t("ho_busy_body", n=probe.count)
-            if probe.busy
-            else t("ho_unknown_body")
-        )
-        return winshell.confirm(t("ho_busy_title"), f"{body}\n\n{t('ho_switch_anyway')} ?")
-
-    def _on_switch(self, acct_id: str, email: str) -> bool:
-        if not self._handoff_cleared():
-            return False
         if not winshell.confirm(
-            t("acct_switch_confirm_title"), t("acct_switch_confirm_body", email=email)
+            t("acct_switch_confirm_title"),
+            format_switch_confirm(email, probe.count, probe.known),
         ):
             return False
         if accounts.switch_to(acct_id, datetime.now(timezone.utc)):

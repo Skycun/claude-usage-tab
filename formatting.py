@@ -81,6 +81,26 @@ def format_account_usage(
     )
 
 
+def format_switch_confirm(email: str, count: int, known: bool = True) -> str:
+    """The single question a switch asks, plus what it is about to move.
+
+    Non-negotiable 8 wants the running-session count in front of the user
+    before ``accounts.switch_to``. It rides inside this body rather than in
+    a dialog of its own: open terminals following the credentials file is
+    the feature, not a hazard, so it is worth a sentence and not a second
+    click.
+
+    ``known=False`` means the probe could not run, and is worded for that
+    uncertainty instead of being read as "nothing is open".
+    """
+    body = t("acct_switch_confirm_body", email=email)
+    if count > 0:
+        return f"{body}\n\n{t('ho_busy_body', n=count)}"
+    if not known:
+        return f"{body}\n\n{t('ho_unknown_body')}"
+    return body
+
+
 def format_local(reset: datetime | None) -> str:
     """Absolute reset time in the user's locale (for notifications)."""
     if not reset:
