@@ -179,6 +179,15 @@ switches back to the plain logo. Four constraints are not negotiable there:
   every click *and* we rebuild it after every poll, both landing in an
   unlocked ``_update_menu`` that destroys and recreates the ``HMENU``. Hence
   the mutex in ``_Icon``.
+* **Every file read and write names ``encoding="utf-8"``.** Windows resolves
+  the default text encoding to the ANSI code page (``cp1252`` here), so a
+  bare ``read_text()`` on a JSON file throws ``UnicodeDecodeError`` the
+  moment the file holds a byte that page does not define. ``~/.claude.json``
+  is rewritten constantly and does hold such bytes, which made this an
+  *intermittent* dead tick rather than an obvious one. ``UnicodeDecodeError``
+  is not caught by ``except json.JSONDecodeError``; name it, or catch
+  ``ValueError``.
+
 * **Under ``pythonw.exe`` there is no stderr.** ``sys.stderr`` is ``None``
   and ``print(..., file=None)`` silently does nothing, so every diagnostic
   would vanish — autostart always launches that way. ``_setup_logging``

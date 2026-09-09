@@ -66,7 +66,7 @@ class Account:
 
 def _load_json(path: Path) -> dict | list | None:
     try:
-        return json.loads(path.read_text())
+        return json.loads(path.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError):
         return None
 
@@ -99,7 +99,7 @@ def _atomic_write_json(path: Path, data: object, *, mode: int) -> None:
     tmp = path.parent / (path.name + ".tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
     try:
-        with os.fdopen(fd, "w") as f:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(json.dumps(data, indent=2))
         os.chmod(tmp, mode)  # enforce mode even if the temp file pre-existed
     except OSError:

@@ -56,8 +56,8 @@ _SUBSCRIPTION_LABELS = {
 
 def _safe_load_json(path: Path) -> dict:
     try:
-        return json.loads(path.read_text())
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError, UnicodeDecodeError):
         return {}
 
 

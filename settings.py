@@ -233,7 +233,9 @@ def ensure_settings_file() -> None:
         return
     try:
         SETTINGS_DIR.mkdir(parents=True, exist_ok=True)
-        SETTINGS_PATH.write_text(json.dumps(DEFAULT_SETTINGS_JSON, indent=2) + "\n")
+        SETTINGS_PATH.write_text(
+            json.dumps(DEFAULT_SETTINGS_JSON, indent=2) + "\n", encoding="utf-8"
+        )
     except OSError as e:
         print(f"settings: cannot create {SETTINGS_PATH}: {e}", file=sys.stderr)
 
@@ -250,8 +252,8 @@ def load_settings() -> Settings:
     """Load the file, falling back to defaults on error."""
     ensure_settings_file()
     try:
-        raw = json.loads(SETTINGS_PATH.read_text())
-    except (json.JSONDecodeError, OSError) as e:
+        raw = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
         print(f"settings: load failed ({e}); using defaults", file=sys.stderr)
         return _from_raw(DEFAULT_SETTINGS_JSON)
     if not isinstance(raw, dict):
@@ -584,4 +586,6 @@ def save_settings(s: Settings) -> None:
     user — we never swallow it silently here.
     """
     SETTINGS_DIR.mkdir(parents=True, exist_ok=True)
-    SETTINGS_PATH.write_text(json.dumps(settings_to_dict(s), indent=2) + "\n")
+    SETTINGS_PATH.write_text(
+        json.dumps(settings_to_dict(s), indent=2) + "\n", encoding="utf-8"
+    )
