@@ -232,6 +232,11 @@ class Indicator:
         self._blink_on = False
         self._att_next_scan = 0.0
 
+        # Standing offer to hand the work to another account when the active
+        # one runs dry; the flag keeps the notification to one per episode.
+        self._offer: handoff.Offer | None = None
+        self._offer_notified = False
+
         self.ind = AppIndicator.Indicator.new(
             APP_ID,
             pick_icon(0, 0),
@@ -299,6 +304,12 @@ class Indicator:
         self.item_clear_alerts = Gtk.MenuItem(label=t("clear_alerts"))
         self.item_clear_alerts.connect("activate", self._on_clear_alerts)
 
+        # Limit-reached handoff — hidden until the active account runs dry
+        # and another one has room.
+        self.item_offer = Gtk.MenuItem(label="")
+        self.item_offer.connect("activate", self._on_offer_clicked)
+        self.sep_offer = Gtk.SeparatorMenuItem()
+
         # Terminal-attention block — hidden until a session is flagged.
         self.item_attention = self._info_item("")
         self.item_attention_clear = Gtk.MenuItem(label=t("att_clear"))
@@ -328,6 +339,8 @@ class Indicator:
             self.item_extra,
             self.item_accounts,
             self.item_costs,
+            self.sep_offer,
+            self.item_offer,
             self.sep_attention,
             self.item_attention,
             self.item_attention_clear,
@@ -359,12 +372,16 @@ class Indicator:
             self.item_attention,
             self.item_attention_clear,
         )
+        self._offer_only = (self.sep_offer, self.item_offer)
         self.menu.show_all()
         # Alert block is hidden until an alert fires.
         for item in self._alert_only:
             item.hide()
         # Attention block is hidden until a Claude terminal flags itself.
         for item in self._attention_only:
+            item.hide()
+        # Offer row is hidden until the active account is actually blocked.
+        for item in self._offer_only:
             item.hide()
         # Extra row hidden by default — only shown when extra credits enabled.
         self.item_extra.hide()
@@ -985,6 +1002,78 @@ class Indicator:
 
         # --- Multi-account submenu ---
         self._render_accounts(account_states or [])
+
+        # --- Limit-reached handoff offer ---
+        self._refresh_offer(claude_state, account_states or [])
+
+    # -- limit-reached handoff offer -------------------------------------
+
+    def _refresh_offer(
+        self, claude_state: dict | None, account_states: list[dict]
+    ) -> None:
+        """Work out whether to offer a switch, and say so once per episode.
+
+        Only meaningful with the switcher enabled: proposing a move the user
+        has not allowed would advertise a disabled feature.
+        """
+        enabled = (
+            self.settings.accounts_enabled and self.settings.account_switch_enabled
+        )
+        if enabled:
+            data = (claude_state or {}).get("data") or {}
+            active_util = to_float((data.get("five_hour") or {}).get("utilization"))
+            candidates = [
+                (
+                    st["acct"].id,
+                    st["acct"].email or st["acct"].label,
+                    to_float(
+                        ((st.get("data") or {}).get("five_hour") or {}).get(
+                            "utilization"
+                        )
+                    ),
+                )
+                for st in account_states
+                if not st.get("active") and st.get("status") == "ok" and st.get("data")
+            ]
+            projects = handoff.recent_projects(1)
+            self._offer = handoff.pick_offer(
+                active_util, candidates, projects[0] if projects else None
+            )
+        else:
+            self._offer = None
+
+        if self._offer is None:
+            # Cleared on the way back down, so the next limit notifies again.
+            self._offer_notified = False
+            for item in self._offer_only:
+                item.hide()
+            return
+
+        self.item_offer.set_label(
+            t(
+                "ho_offer_row",
+                email=self._offer.email,
+                project=self._offer.project.name,
+            )
+        )
+        for item in self._offer_only:
+            item.show()
+        if not self._offer_notified:
+            self._offer_notified = True
+            self.notify(
+                t("ho_offer_title"),
+                t(
+                    "ho_offer_body",
+                    email=self._offer.email,
+                    util=int(self._offer.util),
+                    project=self._offer.project.name,
+                ),
+            )
+
+    def _on_offer_clicked(self, _item: Gtk.MenuItem) -> None:
+        offer = self._offer
+        if offer is not None:
+            self._on_switch_resume(offer.account_id, offer.email, offer.project.path)
 
     # -- accounts --------------------------------------------------------
 

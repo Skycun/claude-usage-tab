@@ -431,16 +431,27 @@ account.
 The folder list comes from the projects you have actually used, most recent
 first, with how long ago each one was open.
 
-**The guard.** Before any switch, with or without a resume, the app looks
-for running `claude` processes and stops if it finds one:
+**It offers itself.** When your active account hits 100 % on the 5 h window
+and another one still has room, you get a notification and a row at the top
+of the menu: *Limit reached — switch to … and resume …*. One click. You don't
+have to go digging through submenus at the moment you're blocked.
 
-> A live session keeps its token in memory, so the swap doesn't disturb it.
-> But when that token expires the session **rewrites the credentials file**,
-> and your switch is gone, minutes later, with no error anywhere.
+**The guard.** Before any switch, the app looks for running `claude`
+processes and tells you what it found. It does **not** stop you, because the
+resume works either way:
 
-So close the session you're leaving first. If you know what you're doing you
-can still choose **Switch anyway**. If the check itself cannot run, the app
-says so rather than pretending nothing is running.
+> A live session keeps its token in memory. It carries on unaffected, and the
+> terminal you're about to open works too. What it can do is rewrite the
+> credentials file when its token expires, leaving the file on the old
+> account, so a *future* launch would start on the wrong one.
+
+So close the old session when convenient, not before clicking. If the check
+itself cannot run, the app says so rather than pretending nothing is running.
+
+**You don't have to quit anything.** Hitting the limit doesn't kill your
+session; it blocks the turn and offers to resume at reset. Leave it. Click
+the offer, a new terminal opens beside it with your conversation, and you
+keep working.
 
 A couple of things worth knowing. The `claude` binary is looked up on `PATH`
 and in the usual install locations, because the daemon starts with a

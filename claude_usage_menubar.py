@@ -229,6 +229,12 @@ class ClaudeUsageApp(rumps.App):
         self._att_next_scan = 0.0
         self._next_flip = 0.0
         self._hooks_installed: bool | None = None
+
+        # Standing offer to hand the work to another account when the active
+        # one runs dry; the flag keeps the banner to one per episode.
+        self._offer: handoff.Offer | None = None
+        self._offer_notified = False
+
         self._blink = rumps.Timer(self._blink_tick, ATTENTION_BEAT)
         self._sync_blink_timer()
 
@@ -447,7 +453,59 @@ class ClaudeUsageApp(rumps.App):
             self._title_body = body.strip() or "C"
         self._apply_title()
 
+        self._refresh_offer(claude_state)
         self._render_menu(claude_state)
+
+    def _refresh_offer(self, claude_state: dict | None) -> None:
+        """Whether to offer a switch, and say so once per limit episode.
+
+        Only meaningful with the switcher enabled: proposing a move the user
+        has not allowed would advertise a disabled feature.
+        """
+        if not (
+            self.settings.accounts_enabled and self.settings.account_switch_enabled
+        ):
+            self._offer = None
+            self._offer_notified = False
+            return
+
+        data = (claude_state or {}).get("data") or {}
+        active_util = to_float((data.get("five_hour") or {}).get("utilization"))
+        candidates = [
+            (
+                st["acct"].id,
+                st["acct"].email or st["acct"].label,
+                to_float(
+                    ((st.get("data") or {}).get("five_hour") or {}).get("utilization")
+                ),
+            )
+            for st in self.account_states
+            if not st.get("active") and st.get("status") == "ok" and st.get("data")
+        ]
+        projects = handoff.recent_projects(1)
+        self._offer = handoff.pick_offer(
+            active_util, candidates, projects[0] if projects else None
+        )
+
+        if self._offer is None:
+            self._offer_notified = False
+            return
+        if not self._offer_notified:
+            self._offer_notified = True
+            notify(
+                t("ho_offer_title"),
+                t(
+                    "ho_offer_body",
+                    email=self._offer.email,
+                    util=int(self._offer.util),
+                    project=self._offer.project.name,
+                ),
+            )
+
+    def _on_offer(self, _sender: object = None) -> None:
+        offer = self._offer
+        if offer is not None:
+            self._on_switch_resume(offer.account_id, offer.email, offer.project.path)
 
     def _on_fresh_tick(self, data: dict, now: datetime) -> set[str]:
         five = data.get("five_hour") or {}
@@ -638,6 +696,21 @@ class ClaudeUsageApp(rumps.App):
             m.add(rumps.MenuItem(t("login_item"), callback=self._on_login))
         for line in self._metric_lines(data):
             m.add(rumps.MenuItem(line))  # no callback → disabled info row
+
+        if self._offer is not None:
+            # Top of the menu on purpose: this row exists because the user is
+            # blocked right now, and it is what they opened the menu for.
+            m.add(rumps.separator)
+            m.add(
+                rumps.MenuItem(
+                    t(
+                        "ho_offer_row",
+                        email=self._offer.email,
+                        project=self._offer.project.name,
+                    ),
+                    callback=self._on_offer,
+                )
+            )
 
         if self.settings.attention.enabled and self._attention.total:
             m.add(rumps.separator)

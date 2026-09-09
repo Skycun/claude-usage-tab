@@ -138,17 +138,24 @@ Account handoff (``handoff.py``): ``accounts.switch_to`` only affects the
 *next* ``claude`` launch, so "switch and carry on" is a switch plus a
 relaunch. The relaunch is the easy half: transcripts are keyed by working
 directory, not by account, so ``claude --continue`` in the same folder picks
-the conversation back up under the new account. The **hard half is knowing
-when it is safe to switch at all**. A live session keeps its access token in
-memory and is unbothered by the swap, but when that token expires it
-refreshes it and *writes the result back* to ``.credentials.json`` — undoing
-the switch minutes later, silently, with nothing in any log. Hence
-``running_sessions``, which every switch path calls first: a process is a
-Claude session when its executable is named ``claude`` (the native installer
-drops ``claude.exe`` in ``~/.local/bin``) or its command line names the npm
-CLI entry point, and never when it is one of ours. A failed probe returns
-``known=False``, **not** zero — "we could not look" and "nothing is running"
-must never collapse into the same answer, because only one of them is safe.
+the conversation back up under the new account. The interesting half is what a
+*running* session does to it. Get the scope of that right, because it is easy
+to overstate: a live session keeps its access token in memory, so the swap
+neither disturbs it nor moves it to the new account, and the terminal we
+launch afterwards works regardless. What a live session can do is refresh its
+token later and *write the result back* to ``.credentials.json``, leaving the
+file pointing at the old account — so a **future** launch starts on the wrong
+one. Annoying, repairable in a click, and not a reason to block. Hence
+``running_sessions``, which every switch path calls first to **warn**, not to
+refuse: a process is a Claude session when its executable is named ``claude``
+(the native installer drops ``claude.exe`` in ``~/.local/bin``) or its
+command line names the npm CLI entry point, and never when it is one of ours.
+A failed probe returns ``known=False``, **not** zero — "we could not look"
+and "nothing is running" must never collapse into the same answer.
+``pick_offer`` holds the other half of the policy: at ``LIMIT_UTIL`` (100%)
+on the five-hour window, offer the stored account with the most room, and
+only if it is under ``ROOM_UTIL`` (90%) — an account already at 92% buys
+minutes, not an afternoon.
 The recent-project list comes from the ``projects`` map of ``~/.claude.json``
 (each entry carries ``lastStartTime``), so no transcript directory name ever
 has to be decoded back into a path, which is lossy. The ``claude`` binary is
@@ -261,11 +268,13 @@ Runtime files (never committed):
    registering a hook that isn't ours — is out of bounds. ``handoff`` reads
    ``~/.claude`` and never writes to it; keep it that way.
 
-8. **Never switch accounts under a running ``claude``.** A live session
-   rewrites ``claudeAiOauth`` when it refreshes its token, which reverts the
-   switch with no error anywhere. Every path that calls
-   ``accounts.switch_to`` must run ``handoff.running_sessions`` first and put
-   the answer in front of the user. Treat ``known=False`` as risky.
+8. **Every ``accounts.switch_to`` caller runs ``handoff.running_sessions``
+   first and puts the answer in front of the user.** A live session rewrites
+   ``claudeAiOauth`` when it refreshes its token, which leaves the file on
+   the old account and sends a *future* launch to the wrong place. That is a
+   warning, not a veto: the switch and the relaunch both work regardless, so
+   the dialog's default is to proceed. Treat ``known=False`` the same as
+   busy — never as "all clear".
 
 ---
 

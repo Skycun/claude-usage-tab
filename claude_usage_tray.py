@@ -232,6 +232,11 @@ class TrayApp:
         self._att_signature: tuple[int, int] = (0, 0)
         self._hooks_installed: bool | None = None
 
+        # Standing offer to hand the work to another account, recomputed on
+        # every poll; the flag keeps the toast to one per limit episode.
+        self._offer: handoff.Offer | None = None
+        self._offer_notified = False
+
         # Menu clicks land on the message-loop thread and must return at once;
         # they push work here instead. A job returning True asks for an
         # immediate poll rather than waiting out the rest of the interval.
@@ -483,7 +488,53 @@ class TrayApp:
             if self.tick_counter % HISTORY_SNAPSHOT_EVERY == 0:
                 self.history.snapshot_to_disk()
 
+        self._refresh_offer(claude_state)
         self._apply_visuals(claude_state)
+
+    # -- limit-reached handoff offer ---------------------------------------
+
+    def _refresh_offer(self, claude_state: dict | None) -> None:
+        """Work out whether to offer a switch, and say so once per episode.
+
+        Only meaningful with the switcher enabled: proposing a move the user
+        has not allowed would be an advert for a disabled feature.
+        """
+        if not (self.settings.accounts_enabled and self.settings.account_switch_enabled):
+            self._offer = None
+            self._offer_notified = False
+            return
+
+        data = (claude_state or {}).get("data") or {}
+        active_util = to_float((data.get("five_hour") or {}).get("utilization"))
+        candidates = [
+            (
+                st["acct"].id,
+                st["acct"].email or st["acct"].label,
+                to_float(((st.get("data") or {}).get("five_hour") or {}).get("utilization")),
+            )
+            for st in self.account_states
+            if not st.get("active") and st.get("status") == "ok" and st.get("data")
+        ]
+        projects = handoff.recent_projects(1)
+        self._offer = handoff.pick_offer(
+            active_util, candidates, projects[0] if projects else None
+        )
+
+        if self._offer is None:
+            # Cleared on the way back down, so the next limit notifies again.
+            self._offer_notified = False
+            return
+        if not self._offer_notified:
+            self._offer_notified = True
+            self.notify(
+                t("ho_offer_title"),
+                t(
+                    "ho_offer_body",
+                    email=self._offer.email,
+                    util=int(self._offer.util),
+                    project=self._offer.project.name,
+                ),
+            )
 
     def _apply_visuals(self, claude_state: dict | None) -> None:
         """Push icon, tooltip and menu to the shell. Worker thread only."""
@@ -766,6 +817,24 @@ class TrayApp:
             yield MenuItem(t("login_item"), self._queued(self._on_login))
         for line in self._metric_lines(data):
             yield MenuItem(line, None, enabled=False)
+
+        if self._offer is not None:
+            # Top of the menu on purpose: this row exists because the user is
+            # blocked right now, and it is the only thing they came here for.
+            yield Menu.SEPARATOR
+            yield MenuItem(
+                t(
+                    "ho_offer_row",
+                    email=self._offer.email,
+                    project=self._offer.project.name,
+                ),
+                self._queued(
+                    self._on_switch_resume,
+                    self._offer.account_id,
+                    self._offer.email,
+                    self._offer.project.path,
+                ),
+            )
 
         if self.settings.attention.enabled and self._attention.total:
             yield Menu.SEPARATOR

@@ -211,9 +211,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "dlg_att_blink_ms": "Cadence du clignotement (ms)",
         # account handoff (handoff.py)
         "ho_busy_title": "Une session Claude tourne encore",
-        "ho_busy_body": "{n} session(s) Claude Code sont ouvertes. Une session vivante réécrit les identifiants quand son jeton expire, ce qui annulerait la bascule sans prévenir. Ferme-les, puis réessaie.",
-        "ho_unknown_body": "Impossible de vérifier si une session Claude est ouverte. Si c'est le cas, elle peut annuler la bascule en rafraîchissant son jeton.",
-        "ho_switch_anyway": "Basculer quand même",
+        "ho_busy_body": "{n} session(s) Claude Code sont ouvertes. La reprise fonctionnera quand même : une session vivante garde son jeton en mémoire. En revanche elle peut réécrire le fichier d'identifiants plus tard, et un prochain lancement repartirait alors sur l'ancien compte. Ferme-la quand tu peux.",
+        "ho_unknown_body": "Impossible de vérifier si une session Claude est ouverte. La reprise fonctionnera, mais une session restée ouverte peut réécrire le fichier d'identifiants plus tard.",
+        "ho_switch_anyway": "Continuer",
         "ho_resume_menu": "Basculer et reprendre dans…",
         "ho_no_projects": "Aucun projet récent",
         "ho_project_row": "{name}",
@@ -226,6 +226,10 @@ STRINGS: dict[str, dict[str, str]] = {
         "ho_no_binary_body": "Impossible de localiser l'exécutable claude. La bascule a bien eu lieu, lance claude --continue toi-même.",
         "ho_launch_fail_title": "Impossible d'ouvrir un terminal",
         "ho_launch_fail_body": "La bascule a bien eu lieu, mais le terminal n'a pas pu être lancé. Lance claude --continue dans {project}.",
+        # limit-reached handoff offer (handoff.pick_offer)
+        "ho_offer_row": "Limite atteinte — basculer sur {email} et reprendre {project}",
+        "ho_offer_title": "Limite 5 h atteinte",
+        "ho_offer_body": "{email} a encore de la place ({util} %). Ouvre le menu pour basculer et reprendre {project}.",
     },
     "en": {
         "not_connected": "not signed in",
@@ -406,9 +410,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "dlg_att_blink_ms": "Blink cadence (ms)",
         # account handoff (handoff.py)
         "ho_busy_title": "A Claude session is still running",
-        "ho_busy_body": "{n} Claude Code session(s) are open. A live session rewrites the credentials when its token expires, which would undo the switch with no warning. Close them, then try again.",
-        "ho_unknown_body": "Could not check whether a Claude session is open. If one is, it can undo the switch when it refreshes its token.",
-        "ho_switch_anyway": "Switch anyway",
+        "ho_busy_body": "{n} Claude Code session(s) are open. The resume will work anyway: a live session keeps its token in memory. It can, however, rewrite the credentials file later, and a future launch would then start on the old account. Close it when you can.",
+        "ho_unknown_body": "Could not check whether a Claude session is open. The resume will work, but a session left open can rewrite the credentials file later.",
+        "ho_switch_anyway": "Continue",
         "ho_resume_menu": "Switch and resume in…",
         "ho_no_projects": "No recent project",
         "ho_project_row": "{name}",
@@ -421,6 +425,10 @@ STRINGS: dict[str, dict[str, str]] = {
         "ho_no_binary_body": "Could not locate the claude executable. The switch went through; run claude --continue yourself.",
         "ho_launch_fail_title": "Could not open a terminal",
         "ho_launch_fail_body": "The switch went through, but the terminal could not be launched. Run claude --continue in {project}.",
+        # limit-reached handoff offer (handoff.pick_offer)
+        "ho_offer_row": "Limit reached — switch to {email} and resume {project}",
+        "ho_offer_title": "5 h limit reached",
+        "ho_offer_body": "{email} still has room ({util} %). Open the menu to switch and resume {project}.",
     },
     "es": {
         "not_connected": "sin sesión",
@@ -597,9 +605,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "dlg_att_blink_ms": "Cadencia del parpadeo (ms)",
         # account handoff (handoff.py)
         "ho_busy_title": "Todavía hay una sesión de Claude abierta",
-        "ho_busy_body": "Hay {n} sesión(es) de Claude Code abiertas. Una sesión viva reescribe las credenciales cuando su token caduca, lo que anularía el cambio sin avisar. Ciérralas e inténtalo de nuevo.",
-        "ho_unknown_body": "No se pudo comprobar si hay una sesión de Claude abierta. Si la hay, puede anular el cambio al refrescar su token.",
-        "ho_switch_anyway": "Cambiar de todos modos",
+        "ho_busy_body": "Hay {n} sesión(es) de Claude Code abiertas. La reanudación funcionará igualmente: una sesión viva conserva su token en memoria. Pero puede reescribir el archivo de credenciales más tarde, y un próximo arranque usaría la cuenta anterior. Ciérrala cuando puedas.",
+        "ho_unknown_body": "No se pudo comprobar si hay una sesión de Claude abierta. La reanudación funcionará, pero una sesión abierta puede reescribir el archivo de credenciales más tarde.",
+        "ho_switch_anyway": "Continuar",
         "ho_resume_menu": "Cambiar y reanudar en…",
         "ho_no_projects": "Ningún proyecto reciente",
         "ho_project_row": "{name}",
@@ -612,6 +620,10 @@ STRINGS: dict[str, dict[str, str]] = {
         "ho_no_binary_body": "No se pudo localizar el ejecutable claude. El cambio se hizo; ejecuta claude --continue tú mismo.",
         "ho_launch_fail_title": "No se pudo abrir un terminal",
         "ho_launch_fail_body": "El cambio se hizo, pero no se pudo abrir el terminal. Ejecuta claude --continue en {project}.",
+        # limit-reached handoff offer (handoff.pick_offer)
+        "ho_offer_row": "Límite alcanzado — cambiar a {email} y reanudar {project}",
+        "ho_offer_title": "Límite de 5 h alcanzado",
+        "ho_offer_body": "{email} todavía tiene margen ({util} %). Abre el menú para cambiar y reanudar {project}.",
     },
     "de": {
         "not_connected": "nicht angemeldet",
@@ -788,9 +800,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "dlg_att_blink_ms": "Blinkfrequenz (ms)",
         # account handoff (handoff.py)
         "ho_busy_title": "Es läuft noch eine Claude-Sitzung",
-        "ho_busy_body": "{n} Claude-Code-Sitzung(en) sind offen. Eine laufende Sitzung schreibt die Zugangsdaten neu, sobald ihr Token abläuft, und macht den Wechsel damit unbemerkt rückgängig. Schließe sie und versuche es erneut.",
-        "ho_unknown_body": "Es ließ sich nicht prüfen, ob eine Claude-Sitzung offen ist. Falls ja, kann sie den Wechsel beim Token-Refresh rückgängig machen.",
-        "ho_switch_anyway": "Trotzdem wechseln",
+        "ho_busy_body": "{n} Claude-Code-Sitzung(en) sind offen. Das Fortsetzen klappt trotzdem: eine laufende Sitzung behält ihr Token im Speicher. Sie kann die Zugangsdaten aber später überschreiben, und ein künftiger Start liefe dann auf dem alten Konto. Schließe sie, sobald es passt.",
+        "ho_unknown_body": "Es ließ sich nicht prüfen, ob eine Claude-Sitzung offen ist. Das Fortsetzen klappt, doch eine offen gebliebene Sitzung kann die Zugangsdaten später überschreiben.",
+        "ho_switch_anyway": "Weiter",
         "ho_resume_menu": "Wechseln und fortsetzen in…",
         "ho_no_projects": "Kein aktuelles Projekt",
         "ho_project_row": "{name}",
@@ -803,6 +815,10 @@ STRINGS: dict[str, dict[str, str]] = {
         "ho_no_binary_body": "Die claude-Datei wurde nicht gefunden. Der Wechsel hat geklappt; starte claude --continue selbst.",
         "ho_launch_fail_title": "Terminal konnte nicht geöffnet werden",
         "ho_launch_fail_body": "Der Wechsel hat geklappt, das Terminal ließ sich nicht starten. Führe claude --continue in {project} aus.",
+        # limit-reached handoff offer (handoff.pick_offer)
+        "ho_offer_row": "Limit erreicht — zu {email} wechseln und {project} fortsetzen",
+        "ho_offer_title": "5-Stunden-Limit erreicht",
+        "ho_offer_body": "{email} hat noch Luft ({util} %). Öffne das Menü, um zu wechseln und {project} fortzusetzen.",
     },
     "ja": {
         "not_connected": "未接続",
@@ -979,9 +995,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "dlg_att_blink_ms": "点滅の間隔 (ms)",
         # account handoff (handoff.py)
         "ho_busy_title": "Claude のセッションがまだ動いています",
-        "ho_busy_body": "Claude Code のセッションが {n} 件開いています。動作中のセッションはトークンの期限が切れると認証情報を上書きするため、切り替えが黙って取り消されます。閉じてからもう一度お試しください。",
-        "ho_unknown_body": "Claude のセッションが開いているか確認できませんでした。開いている場合、トークン更新時に切り替えが取り消されることがあります。",
-        "ho_switch_anyway": "それでも切り替える",
+        "ho_busy_body": "Claude Code のセッションが {n} 件開いています。再開は問題なく動きます。動作中のセッションはトークンをメモリに保持しているためです。ただし後から認証情報ファイルを上書きすることがあり、その場合は次回の起動が以前のアカウントになります。落ち着いたら閉じてください。",
+        "ho_unknown_body": "Claude のセッションが開いているか確認できませんでした。再開は動作しますが、開いたままのセッションが後で認証情報ファイルを上書きすることがあります。",
+        "ho_switch_anyway": "続行",
         "ho_resume_menu": "切り替えて再開する…",
         "ho_no_projects": "最近のプロジェクトなし",
         "ho_project_row": "{name}",
@@ -994,6 +1010,10 @@ STRINGS: dict[str, dict[str, str]] = {
         "ho_no_binary_body": "claude の実行ファイルを特定できませんでした。切り替えは完了しています。claude --continue をご自身で実行してください。",
         "ho_launch_fail_title": "ターミナルを開けませんでした",
         "ho_launch_fail_body": "切り替えは完了しましたが、ターミナルを起動できませんでした。{project} で claude --continue を実行してください。",
+        # limit-reached handoff offer (handoff.pick_offer)
+        "ho_offer_row": "上限に到達 — {email} に切り替えて {project} を再開",
+        "ho_offer_title": "5 時間の上限に到達",
+        "ho_offer_body": "{email} にはまだ余裕があります ({util} %)。メニューから切り替えて {project} を再開できます。",
     },
     "pt": {
         "not_connected": "sem sessão",
@@ -1170,9 +1190,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "dlg_att_blink_ms": "Cadência do piscar (ms)",
         # account handoff (handoff.py)
         "ho_busy_title": "Ainda há uma sessão Claude a correr",
-        "ho_busy_body": "Estão abertas {n} sessão(ões) do Claude Code. Uma sessão viva reescreve as credenciais quando o token expira, o que anularia a troca sem aviso. Fecha-as e tenta de novo.",
-        "ho_unknown_body": "Não foi possível verificar se há uma sessão Claude aberta. Se houver, pode anular a troca ao renovar o token.",
-        "ho_switch_anyway": "Trocar mesmo assim",
+        "ho_busy_body": "Estão abertas {n} sessão(ões) do Claude Code. A retoma vai funcionar à mesma: uma sessão viva mantém o token em memória. Mas pode reescrever o ficheiro de credenciais mais tarde, e um próximo arranque usaria a conta antiga. Fecha-a quando puderes.",
+        "ho_unknown_body": "Não foi possível verificar se há uma sessão Claude aberta. A retoma vai funcionar, mas uma sessão deixada aberta pode reescrever o ficheiro de credenciais mais tarde.",
+        "ho_switch_anyway": "Continuar",
         "ho_resume_menu": "Trocar e retomar em…",
         "ho_no_projects": "Nenhum projeto recente",
         "ho_project_row": "{name}",
@@ -1185,6 +1205,10 @@ STRINGS: dict[str, dict[str, str]] = {
         "ho_no_binary_body": "Não foi possível localizar o executável claude. A troca foi feita; executa claude --continue tu mesmo.",
         "ho_launch_fail_title": "Não foi possível abrir um terminal",
         "ho_launch_fail_body": "A troca foi feita, mas o terminal não arrancou. Executa claude --continue em {project}.",
+        # limit-reached handoff offer (handoff.pick_offer)
+        "ho_offer_row": "Limite atingido — trocar para {email} e retomar {project}",
+        "ho_offer_title": "Limite de 5 h atingido",
+        "ho_offer_body": "{email} ainda tem margem ({util} %). Abre o menu para trocar e retomar {project}.",
     },
 }
 

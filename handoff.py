@@ -63,6 +63,12 @@ _CREATE_NO_WINDOW = 0x08000000
 
 DEFAULT_PROJECT_LIMIT = 6
 
+# When to offer a handoff, and what counts as somewhere worth going. An
+# account already at 90% would buy minutes, not an afternoon, so it is not
+# offered — the user can still switch to it by hand from the accounts menu.
+LIMIT_UTIL = 100.0
+ROOM_UTIL = 90.0
+
 
 @dataclass(frozen=True)
 class Probe:
@@ -88,6 +94,37 @@ class Project:
     path: str
     name: str
     last_used: float  # epoch seconds; 0.0 when unknown
+
+
+@dataclass(frozen=True)
+class Offer:
+    """A worthwhile handoff: this account, this folder, right now."""
+
+    account_id: str
+    email: str
+    util: float
+    project: Project
+
+
+def pick_offer(
+    active_util: float,
+    candidates: "list[tuple[str, str, float]]",
+    project: Project | None,
+) -> Offer | None:
+    """Choose where to send the user when the active account runs dry.
+
+    ``candidates`` are ``(account_id, email, five-hour utilisation)`` for the
+    *other* stored accounts, already polled by the caller — this module does
+    no network of its own. Pure and side-effect free so all three front-ends
+    apply one policy instead of three.
+    """
+    if active_util < LIMIT_UTIL or project is None:
+        return None
+    usable = [c for c in candidates if c[2] < ROOM_UTIL]
+    if not usable:
+        return None
+    account_id, email, util = min(usable, key=lambda c: c[2])
+    return Offer(account_id=account_id, email=email, util=util, project=project)
 
 
 # --------------------------------------------------------------- process probe
