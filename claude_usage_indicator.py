@@ -70,6 +70,7 @@ from settings import (  # noqa: E402
 from strings import current_lang, detect_lang, set_lang, setup_locale, t  # noqa: E402
 from topbar import compose_label  # noqa: E402
 from formatting import (  # noqa: E402
+    format_account_usage,
     format_age,
     format_cost,
     format_local,
@@ -1156,9 +1157,14 @@ class Indicator:
         status = st.get("status")
         if status == "ok" and st.get("data"):
             data = st["data"]
-            five = to_float((data.get("five_hour") or {}).get("utilization"))
-            seven = to_float((data.get("seven_day") or {}).get("utilization"))
-            return t("acct_usage", five=five, seven=seven)
+            five = data.get("five_hour") or {}
+            seven = data.get("seven_day") or {}
+            return format_account_usage(
+                to_float(five.get("utilization")),
+                to_float(seven.get("utilization")),
+                parse_iso(five.get("resets_at")),
+                parse_iso(seven.get("resets_at")),
+            )
         if status == "rate_limited":
             return t("acct_usage_rl")
         if status == "expired":

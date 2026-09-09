@@ -54,6 +54,33 @@ def format_remaining(reset: datetime | None) -> str:
     return t("duration_minutes", m=minutes)
 
 
+def format_account_usage(
+    five: float,
+    seven: float,
+    five_reset: datetime | None = None,
+    seven_reset: datetime | None = None,
+) -> str:
+    """One account's row body: both windows, and when each frees up.
+
+    A percentage alone does not answer the question you actually have in
+    front of the accounts menu, which is "can I work on this one, and if not,
+    when". Shared by the three front-ends because they had three identical
+    copies of the percentage-only version, which is how they drift.
+
+    Falls back to the bare percentages when the payload carried no reset
+    time at all — a row of dashes would be noise, not information.
+    """
+    if five_reset is None and seven_reset is None:
+        return t("acct_usage", five=five, seven=seven)
+    return t(
+        "acct_usage_reset",
+        five=five,
+        seven=seven,
+        fr=format_remaining(five_reset),
+        sr=format_remaining(seven_reset),
+    )
+
+
 def format_age(seconds: float | None) -> str:
     """Human 'how long ago' — the mirror of :func:`format_remaining`.
 

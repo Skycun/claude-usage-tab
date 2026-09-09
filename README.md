@@ -405,9 +405,11 @@ between them.
   you sign in as a different account the daemon snapshots it on the next
   tick. Nothing to click.
 - **See every account's usage.** A **Claude accounts** submenu lists them
-  all with their 5h / 7d usage; the active one is marked `●`. Inactive
-  accounts are polled too (their token is refreshed automatically when it
-  expires).
+  all with their 5 h / 7 d usage *and how long until each window resets*
+  (`5h 100% ↳ 51min · 7j 11% ↳ 6j 17h`); the active one is marked `●`.
+  Inactive accounts are polled too (their token is refreshed automatically
+  when it expires). The countdown is the point: a percentage tells you that
+  you're stuck, the countdown tells you whether to wait or to switch.
 - **Switch (opt-in).** Turn on **Allow switching accounts** in the
   *Accounts* tab first — it's off by default because it **writes into
   `~/.claude`**. Then pick an account → **Switch to this account**. The

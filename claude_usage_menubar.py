@@ -41,6 +41,7 @@ from alerts import History, evaluate_alerts
 from api import fetch_usage, parse_iso, read_account, read_token
 from formatting import (
     fmt_secs,
+    format_account_usage,
     format_age,
     format_cost,
     format_local,
@@ -399,9 +400,14 @@ class ClaudeUsageApp(rumps.App):
         status = st.get("status")
         if status == "ok" and st.get("data"):
             data = st["data"]
-            five = to_float((data.get("five_hour") or {}).get("utilization"))
-            seven = to_float((data.get("seven_day") or {}).get("utilization"))
-            return t("acct_usage", five=five, seven=seven)
+            five = data.get("five_hour") or {}
+            seven = data.get("seven_day") or {}
+            return format_account_usage(
+                to_float(five.get("utilization")),
+                to_float(seven.get("utilization")),
+                parse_iso(five.get("resets_at")),
+                parse_iso(seven.get("resets_at")),
+            )
         if status == "rate_limited":
             return t("acct_usage_rl")
         if status == "expired":
