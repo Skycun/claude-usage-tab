@@ -116,9 +116,16 @@ Terminal attention (``attention.py`` + ``attention_hooks.py``): blink the
 icon while a Claude Code terminal has finished its turn or is stuck on a
 permission prompt. **Opt-in** (``attention.enabled``, off by default) and it
 needs hooks registered in ``~/.claude/settings.json`` — see non-negotiable 7
-for the rules that write is held to. Four events are hooked: ``Stop`` flags
-the session as *done*, ``Notification`` as *waiting*, and
-``UserPromptSubmit`` / ``SessionEnd`` clear it. Each writes one small file
+for the rules that write is held to. Five events are hooked: ``Stop`` flags
+the session as *done*, ``Notification`` as *waiting*, and ``PostToolUse`` /
+``UserPromptSubmit`` / ``SessionEnd`` clear it. ``PostToolUse`` is in that
+list because **answering is not prompting**: a permission prompt is cleared
+by approving it and an ``AskUserQuestion`` by picking an option, and neither
+fires ``UserPromptSubmit`` — without it the icon blinks *waiting* for the
+whole rest of a turn you already unblocked. That clear skips a flag younger
+than ``SETTLE_SECONDS``: hook processes are ``async``, so a tool finishing
+next to a permission prompt would otherwise race the new flag away. Each
+event writes one small file
 under ``~/.cache/…/attention/``, named by a **sanitised** session id, holding
 the folder's basename and never the path (same hygiene rule as
 ``costs.json``). *waiting* outranks *done* everywhere and blinks at half the
