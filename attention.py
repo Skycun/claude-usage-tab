@@ -23,6 +23,11 @@ Design notes worth keeping:
   rule as ``costs.json``: this cache is unencrypted and gets shared verbatim
   in bug reports, so it holds the folder name you need to tell two terminals
   apart and nothing more.
+* **Answering is not prompting.** A permission prompt is cleared by approving
+  it and an ``AskUserQuestion`` by picking an option; neither fires
+  ``UserPromptSubmit``. ``PostToolUse`` is hooked for exactly that reason — a
+  tool that ran is a session that is not blocked any more — otherwise a
+  terminal you unblocked keeps blinking *waiting* for the rest of its turn.
 * **Everything is best-effort.** A hook that raises would surface as an error
   inside Claude Code, and a failed read must never break the poll loop, so
   both directions degrade to "no flags" instead of propagating.
@@ -53,14 +58,24 @@ VALID_KINDS = (KIND_WAITING, KIND_DONE)
 
 # Claude Code hook event -> what it does to that session's flag. ``Stop``
 # fires when the turn ends, ``Notification`` when Claude asks for permission
-# or has sat idle for a minute, and the last two mean you're back (or gone).
+# or has sat idle for a minute, and the last three mean you're back (or gone).
 CLEAR = "clear"
+CLEAR_SETTLED = "clear-settled"
 EVENT_ACTIONS: dict[str, str] = {
     "Stop": KIND_DONE,
     "Notification": KIND_WAITING,
+    "PostToolUse": CLEAR_SETTLED,
     "UserPromptSubmit": CLEAR,
     "SessionEnd": CLEAR,
 }
+
+# How old a flag has to be before ``PostToolUse`` may remove it. Hook
+# processes run ``async``, so two of them race: a tool that finished just
+# before a permission prompt can land its clear *after* the ``Notification``
+# that raised the flag, and swallow the one blink that actually mattered. A
+# flag younger than this is left alone — the next tool, or ``Stop``, gets it
+# a beat later, and a prompt answered that fast needed no blink anyway.
+SETTLE_SECONDS = 2.0
 
 # Top-bar markers for the two text shells (GNOME, macOS). ASCII only: the
 # GNOME top-bar font drops most non-ASCII glyphs, which is the same reason
@@ -155,10 +170,18 @@ def record(session_id: str, kind: str, cwd: str = "") -> bool:
         return False
 
 
-def clear(session_id: str) -> None:
-    """Unflag one session. A missing file is the expected common case."""
+def clear(session_id: str, min_age: float = 0.0) -> None:
+    """Unflag one session. A missing file is the expected common case.
+
+    ``min_age`` keeps a flag written less than that many seconds ago, which is
+    how the ``PostToolUse`` clear stays out of :data:`SETTLE_SECONDS`' race.
+    The file's mtime is the flag's own timestamp, so no read is needed.
+    """
+    path = _path(session_id)
     try:
-        _path(session_id).unlink()
+        if min_age > 0.0 and time.time() - path.stat().st_mtime < min_age:
+            return
+        path.unlink()
     except OSError:
         pass
 
@@ -252,6 +275,9 @@ def handle_event(event: str, payload: dict) -> None:
     session_id = safe_id(payload.get("session_id"))
     if action == CLEAR:
         clear(session_id)
+        return
+    if action == CLEAR_SETTLED:
+        clear(session_id, min_age=SETTLE_SECONDS)
         return
     record(session_id, action, str(payload.get("cwd") or ""))
 

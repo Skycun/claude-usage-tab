@@ -374,12 +374,14 @@ Waiting always wins: it is the state that is actually blocking work.
 
 **What the hooks do**
 
-The blink is fed by four Claude Code hooks added to
+The blink is fed by five Claude Code hooks added to
 `~/.claude/settings.json`: `Stop` and `Notification` raise a flag for the
-session, `UserPromptSubmit` and `SessionEnd` clear it. So the blink stops on
-its own the moment you type your next prompt in that terminal — you never
-have to dismiss it. The dropdown lists which project each waiting terminal
-belongs to, with a **Stop blinking** row if you want to silence them all.
+session, `PostToolUse`, `UserPromptSubmit` and `SessionEnd` clear it. So the
+blink stops on its own the moment that terminal starts moving again — your
+next prompt, but also the permission you just approved or the question you
+just answered — you never have to dismiss it. The dropdown lists which
+project each waiting terminal belongs to, with a **Stop blinking** row if you
+want to silence them all.
 
 **Good to know**
 
