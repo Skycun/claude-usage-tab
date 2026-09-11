@@ -24,12 +24,15 @@ import shlex
 import subprocess
 import sys
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import rumps
 
 import accounts
+import attention
+import attention_hooks
 import costs
 import sound
 import updates
@@ -74,6 +77,13 @@ UPDATE_CHECK_DELAY = 5  # seconds after launch before the first update check
 # parks its result and raises a flag; this main-loop timer is what re-renders
 # the menu. The tick itself is a boolean check — cheap enough to run often.
 COST_APPLY_INTERVAL = 5
+
+# Terminal-attention blink (see ``attention.py``). One fixed beat drives both
+# the flag scan and the flip; the configured cadence is honoured by counting
+# elapsed time inside the callback rather than by restarting the timer, which
+# rumps does not reliably support while it is running.
+ATTENTION_BEAT = 0.2
+ATTENTION_RESCAN_SECONDS = 1.0
 
 
 # --------------------------------------------------------------- macOS shell-outs
@@ -208,6 +218,18 @@ class ClaudeUsageApp(rumps.App):
         )
         self._cost_apply.start()
 
+        # Terminal-attention blink: the composed label is kept so the beat can
+        # re-prefix it without recomposing, and the timer only runs while the
+        # feature is on.
+        self._attention = attention.Snapshot()
+        self._title_body: str = ""
+        self._blink_on = False
+        self._att_next_scan = 0.0
+        self._next_flip = 0.0
+        self._hooks_installed: bool | None = None
+        self._blink = rumps.Timer(self._blink_tick, ATTENTION_BEAT)
+        self._sync_blink_timer()
+
         self._tick()  # first render immediately
 
     # ------------------------------------------------------------------ tick
@@ -279,6 +301,8 @@ class ClaudeUsageApp(rumps.App):
                 self._tick, max(10, self.settings.poll_seconds)
             )
             self._poll.start()
+        if old.attention != self.settings.attention:
+            self._sync_blink_timer()
 
     def _tick_claude(self, now: datetime) -> dict:
         if self.backoff_until and now < self.backoff_until:
@@ -416,9 +440,10 @@ class ClaudeUsageApp(rumps.App):
             claude_state, self.settings.topbar, bool(self.active_alerts)
         )
         if body is None:
-            self.title = t("label_not_connected").strip()
+            self._title_body = t("label_not_connected").strip()
         else:
-            self.title = body.strip() or "C"
+            self._title_body = body.strip() or "C"
+        self._apply_title()
 
         self._render_menu(claude_state)
 
@@ -527,6 +552,80 @@ class ClaudeUsageApp(rumps.App):
             return t("refresh_fail", ts=datetime.now().strftime("%H:%M:%S"))
         return t("refresh_never")
 
+    # ------------------------------------------------------- attention blink
+
+    def _sync_blink_timer(self) -> None:
+        """Run the beat only while the blink is enabled."""
+        if self.settings.attention.enabled:
+            if not self._blink.is_alive():
+                self._blink.start()
+            return
+        if self._blink.is_alive():
+            self._blink.stop()
+        self._attention = attention.Snapshot()
+        self._blink_on = False
+        self._apply_title()
+
+    def _blink_tick(self, _timer: object = None) -> None:
+        try:
+            self._blink_step()
+        except Exception as e:  # noqa: BLE001 — a blink must not kill the app
+            print(f"blink error: {type(e).__name__}: {e}", file=sys.stderr)
+
+    def _blink_step(self) -> None:
+        att = self.settings.attention
+        if not att.enabled:
+            return
+        now = time.monotonic()
+        if now >= self._att_next_scan:
+            previous = self._attention
+            self._attention = attention.scan(att.expire_minutes)
+            self._att_next_scan = now + ATTENTION_RESCAN_SECONDS
+            if (previous.total, previous.kind) != (
+                self._attention.total,
+                self._attention.kind,
+            ):
+                self._render_menu(self._last_claude_state)
+
+        kind = self._attention.kind
+        if kind is None:
+            if self._blink_on:
+                self._blink_on = False
+                self._apply_title()
+            return
+
+        period = att.waiting_ms if kind == attention.KIND_WAITING else att.blink_ms
+        if now < self._next_flip:
+            return
+        self._next_flip = now + period / 1000.0
+        self._blink_on = not self._blink_on
+        self._apply_title()
+
+    def _apply_title(self) -> None:
+        self.title = self._attention_prefix() + (self._title_body or "C")
+
+    def _attention_prefix(self) -> str:
+        """The pulsing marker, padded to a fixed width.
+
+        The menu bar re-lays out on every title change, so the lit and dark
+        halves must be the same number of characters or the whole label
+        would jitter sideways twice a second.
+        """
+        if not self.settings.attention.enabled:
+            return ""
+        mark = attention.marker(self._attention.kind)
+        if not mark:
+            return ""
+        return f"{mark} " if self._blink_on else "  "
+
+    def _on_clear_attention(self, _sender: object = None) -> None:
+        attention.clear_all()
+        self._attention = attention.Snapshot()
+        self._att_next_scan = time.monotonic() + ATTENTION_RESCAN_SECONDS
+        self._blink_on = False
+        self._apply_title()
+        self._render_menu(self._last_claude_state)
+
     def _render_menu(self, claude_state: dict | None) -> None:
         m = self.menu
         m.clear()
@@ -537,6 +636,28 @@ class ClaudeUsageApp(rumps.App):
             m.add(rumps.MenuItem(t("login_item"), callback=self._on_login))
         for line in self._metric_lines(data):
             m.add(rumps.MenuItem(line))  # no callback → disabled info row
+
+        if self.settings.attention.enabled and self._attention.total:
+            m.add(rumps.separator)
+            parent = rumps.MenuItem(t("att_menu_title", n=self._attention.total))
+            for session in self._attention.sessions:
+                state = t(
+                    "att_state_waiting"
+                    if session.kind == attention.KIND_WAITING
+                    else "att_state_done"
+                )
+                parent.add(
+                    rumps.MenuItem(
+                        t(
+                            "att_session",
+                            project=session.project or session.session_id[:12],
+                            state=state,
+                        )
+                    )
+                )
+            parent.add(rumps.separator)
+            parent.add(rumps.MenuItem(t("att_clear"), callback=self._on_clear_attention))
+            m.add(parent)
 
         if self.settings.accounts_enabled and self.account_states:
             m.add(rumps.separator)
@@ -763,6 +884,30 @@ class ClaudeUsageApp(rumps.App):
             )
         )
         opts.add(sound_menu)
+
+        att_menu = rumps.MenuItem(t("dlg_att_section"))
+        att_menu.add(
+            self._check_item(
+                t("dlg_att_enabled"),
+                self.settings.attention.enabled,
+                lambda _s: self._toggle_attention(),
+            )
+        )
+        att_menu.add(rumps.separator)
+        if self._hooks_installed is None:
+            self._refresh_hook_state()
+        if self._hooks_installed:
+            att_menu.add(rumps.MenuItem(t("dlg_att_hooks_ok")))
+            att_menu.add(
+                rumps.MenuItem(t("dlg_att_hooks_remove"), callback=self._on_remove_hooks)
+            )
+        else:
+            att_menu.add(rumps.MenuItem(t("dlg_att_hooks_missing")))
+            att_menu.add(
+                rumps.MenuItem(t("dlg_att_hooks_install"), callback=self._on_install_hooks)
+            )
+        opts.add(att_menu)
+
         # Only offer the toggle where ticking it would actually do something:
         # a validated platform with a runner installed. There is no settings
         # dialog here to explain an inert checkbox.
@@ -818,6 +963,49 @@ class ClaudeUsageApp(rumps.App):
 
     def _set_language(self, code: str) -> None:
         self._save_and_apply(dataclasses.replace(self.settings, lang=code))
+
+    def _toggle_attention(self) -> None:
+        """Flip the blink, and say so when nothing would ever feed it."""
+        att = dataclasses.replace(
+            self.settings.attention, enabled=not self.settings.attention.enabled
+        )
+        self._save_and_apply(dataclasses.replace(self.settings, attention=att))
+        self._sync_blink_timer()
+        if att.enabled:
+            self._refresh_hook_state()
+            if not self._hooks_installed:
+                notify(t("dlg_att_section"), t("dlg_att_hooks_missing"))
+
+    def _refresh_hook_state(self) -> None:
+        self._hooks_installed = attention_hooks.installed()
+
+    def _on_install_hooks(self, _sender: object = None) -> None:
+        if rumps.alert(
+            title=t("dlg_att_hooks_confirm_title"),
+            message=t("dlg_att_hooks_confirm_body"),
+            ok=t("dlg_att_hooks_install"),
+            cancel=t("dlg_cancel"),
+        ) != 1:
+            return
+        result = attention_hooks.install()
+        self._refresh_hook_state()
+        if not result.ok:
+            notify(t("dlg_att_section"), t("dlg_att_hooks_failed", err=result.detail))
+            return
+        test = attention_hooks.selftest()
+        notify(
+            t("dlg_att_section"),
+            t("dlg_att_hooks_ok")
+            if test.ok
+            else t("dlg_att_hooks_failed", err=test.detail),
+        )
+
+    def _on_remove_hooks(self, _sender: object = None) -> None:
+        result = attention_hooks.uninstall()
+        self._refresh_hook_state()
+        self._on_clear_attention()
+        if not result.ok:
+            notify(t("dlg_att_section"), t("dlg_att_hooks_failed", err=result.detail))
 
     def _toggle_cost_enabled(self) -> None:
         """Flip the cost readout. The command/cadence stay in settings.json."""

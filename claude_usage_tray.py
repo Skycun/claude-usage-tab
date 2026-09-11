@@ -45,6 +45,8 @@ import pystray
 from pystray import Menu, MenuItem
 
 import accounts
+import attention
+import attention_hooks
 import costs
 import sound
 import trayicon
@@ -92,6 +94,14 @@ BOOT_COOLDOWN = timedelta(minutes=5)
 HISTORY_SNAPSHOT_EVERY = 5
 UPDATE_CHECK_DELAY = 5  # seconds after launch before the first update check
 MIN_POLL_SECONDS = 10
+
+# Terminal-attention blink cadences. Nothing here rides the usage poll: a
+# hook fires the moment a turn ends, and waiting two minutes to notice would
+# defeat the point. Scanning the flag directory is one ``iterdir`` over a
+# handful of tiny files, so a one-second beat costs nothing measurable.
+ATTENTION_RESCAN_SECONDS = 1.0
+ATTENTION_IDLE_SECONDS = 1.0
+ATTENTION_OFF_SECONDS = 5.0
 
 APP_TITLE = "Claude Usage Tab"
 
@@ -209,6 +219,17 @@ class TrayApp:
         self.account_states: list[dict] = []
         self._last_claude_state: dict | None = None
 
+        # Terminal-attention blink. ``_base_icon`` is the resting frame the
+        # last poll composed, kept so a blink can restore it without redoing
+        # the whole render; ``_blink_on`` is which half of the cycle we're in.
+        self._attention = attention.Snapshot()
+        self._base_icon = None
+        self._badge_text: str | None = None
+        self._blink_on = False
+        self._att_next_scan = 0.0
+        self._att_signature: tuple[int, int] = (0, 0)
+        self._hooks_installed: bool | None = None
+
         # Menu clicks land on the message-loop thread and must return at once;
         # they push work here instead. A job returning True asks for an
         # immediate poll rather than waiting out the rest of the interval.
@@ -233,6 +254,7 @@ class TrayApp:
         icon.visible = True
         next_poll = 0.0
         next_update = time.monotonic() + UPDATE_CHECK_DELAY
+        next_blink = 0.0
         first_update = True
 
         while self._running:
@@ -248,8 +270,12 @@ class TrayApp:
                 forced, first_update = first_update, False
                 self._safe(lambda: self._check_update(force=forced), "update check")
                 next_update = time.monotonic() + updates.PERIODIC_INTERVAL
+            if time.monotonic() >= next_blink:
+                self._safe(self._blink_step, "blink")
+                next_blink = time.monotonic() + self._blink_interval()
 
-            timeout = max(0.05, min(next_poll, next_update) - time.monotonic())
+            deadlines = [next_poll, next_update, next_blink]
+            timeout = max(0.05, min(deadlines) - time.monotonic())
             try:
                 job = self._jobs.get(timeout=timeout)
             except queue.Empty:
@@ -309,6 +335,7 @@ class TrayApp:
 
         self._render(claude_state, now)
         self._refresh_costs()
+        self._safe(self._refresh_hook_state, "hook state")
 
     def _reload_settings_if_needed(self) -> None:
         current = settings_mtime()
@@ -458,11 +485,74 @@ class TrayApp:
 
     def _apply_visuals(self, claude_state: dict | None) -> None:
         """Push icon, tooltip and menu to the shell. Worker thread only."""
-        self.icon.icon = self._compose_icon(claude_state)
+        self._base_icon = self._compose_icon(claude_state)
+        # A poll always lands on the resting frame; the blink timer takes the
+        # icon back over on its next beat.
+        self._blink_on = False
+        self.icon.icon = self._base_icon
         self.icon.title = winshell.clamp(
             self._compose_tooltip(claude_state), winshell.MAX_TIP
         )
         self.icon.update_menu()
+
+    # -- attention blink ---------------------------------------------------
+
+    def _blink_interval(self) -> float:
+        """Seconds until the next blink beat, given what is flagged."""
+        att = self.settings.attention
+        if not att.enabled:
+            return ATTENTION_OFF_SECONDS
+        kind = self._attention.kind
+        if kind is None:
+            return ATTENTION_IDLE_SECONDS
+        ms = att.waiting_ms if kind == attention.KIND_WAITING else att.blink_ms
+        return ms / 1000.0
+
+    def _blink_step(self) -> None:
+        """One beat: rescan if due, then flip the icon. Worker thread only."""
+        att = self.settings.attention
+        if not att.enabled:
+            self._rest()
+            return
+
+        now = time.monotonic()
+        if now >= self._att_next_scan:
+            self._attention = attention.scan(att.expire_minutes)
+            self._att_next_scan = now + ATTENTION_RESCAN_SECONDS
+            signature = (len(self._attention.waiting), len(self._attention.done))
+            if signature != self._att_signature:
+                # The menu carries the count, so it follows the scan — but
+                # only when the count actually moved. Rebuilding the native
+                # menu every second for nothing is exactly the churn the
+                # ``_Icon`` mutex exists to survive.
+                self._att_signature = signature
+                self.icon.update_menu()
+
+        kind = self._attention.kind
+        if kind is None:
+            self._rest()
+            return
+
+        self._blink_on = not self._blink_on
+        self.icon.icon = (
+            self._attention_frame(kind) if self._blink_on else self._resting_icon()
+        )
+
+    def _rest(self) -> None:
+        """Put the resting frame back, if a blink left the other one up."""
+        if not self._blink_on:
+            return
+        self._blink_on = False
+        self.icon.icon = self._resting_icon()
+
+    def _resting_icon(self):
+        return self._base_icon if self._base_icon is not None else trayicon.fallback()
+
+    def _attention_frame(self, kind: str):
+        """The lit half of the cycle: same glyph if we have one, else a tile."""
+        if self._badge_text:
+            return trayicon.attention_badge(self._badge_text, kind)
+        return trayicon.attention_dot(kind)
 
     # -- icon -------------------------------------------------------------
 
@@ -490,6 +580,9 @@ class TrayApp:
         status = (claude_state or {}).get("status")
         data = (claude_state or {}).get("data") or {}
         fresh = bool((claude_state or {}).get("fresh"))
+        # Remembered for the blink, which reuses the glyph so the number stays
+        # readable through the cycle. ``None`` means we're in logo mode.
+        self._badge_text = None
 
         if claude_state is None:
             return self._logo_icon("gray-claude.png")
@@ -508,9 +601,8 @@ class TrayApp:
             return self._logo_icon("claude.png")
 
         peak = max(values)
-        return trayicon.badge(
-            trayicon.badge_text(peak), trayicon.state_color(peak, fresh)
-        )
+        self._badge_text = trayicon.badge_text(peak)
+        return trayicon.badge(self._badge_text, trayicon.state_color(peak, fresh))
 
     def _logo_icon(self, name: str):
         path = _icon_file(name)
@@ -535,6 +627,9 @@ class TrayApp:
             header = f"{APP_TITLE} — {body.strip()}"
 
         candidates = list(self._metric_lines((claude_state or {}).get("data") or {}))
+        attention_line = self._attention_line()
+        if attention_line:
+            candidates.insert(0, attention_line)
         if claude_state and claude_state.get("status") == "rate_limited":
             wait = claude_state.get("wait_secs")
             if wait:
@@ -670,6 +765,13 @@ class TrayApp:
         for line in self._metric_lines(data):
             yield MenuItem(line, None, enabled=False)
 
+        if self.settings.attention.enabled and self._attention.total:
+            yield Menu.SEPARATOR
+            yield MenuItem(
+                t("att_menu_title", n=self._attention.total),
+                Menu(*self._attention_items()),
+            )
+
         if self.settings.accounts_enabled and self.account_states:
             yield Menu.SEPARATOR
             yield MenuItem(t("accounts_menu"), Menu(*self._account_items()))
@@ -705,6 +807,43 @@ class TrayApp:
         yield Menu.SEPARATOR
         yield MenuItem(t("dlg_version", ver=updates.current_version()), None, enabled=False)
         yield MenuItem(t("quit"), _direct(self._quit))
+
+    def _attention_items(self):
+        """One row per flagged session, then the "stop blinking" escape."""
+        for session in self._attention.sessions:
+            state = t(
+                "att_state_waiting"
+                if session.kind == attention.KIND_WAITING
+                else "att_state_done"
+            )
+            label = t(
+                "att_session",
+                project=session.project or session.session_id[:12],
+                state=state,
+            )
+            yield MenuItem(label, None, enabled=False)
+        yield Menu.SEPARATOR
+        yield MenuItem(t("att_clear"), self._queued(self._on_clear_attention))
+
+    def _attention_line(self) -> str:
+        """Tooltip fragment for what is flagged, or "" when nothing is."""
+        snap = self._attention
+        if not self.settings.attention.enabled or not snap.total:
+            return ""
+        parts = []
+        if snap.waiting:
+            parts.append(t("att_tip_waiting", n=len(snap.waiting)))
+        if snap.done:
+            parts.append(t("att_tip_done", n=len(snap.done)))
+        return "  ·  ".join(parts)
+
+    def _on_clear_attention(self) -> None:
+        attention.clear_all()
+        self._attention = attention.Snapshot()
+        self._att_signature = (0, 0)
+        self._att_next_scan = time.monotonic() + ATTENTION_RESCAN_SECONDS
+        self._rest()
+        self.icon.update_menu()
 
     def _refresh_label(self, claude_state: dict | None) -> str:
         if claude_state and claude_state.get("fresh"):
@@ -881,6 +1020,7 @@ class TrayApp:
             checked=_flag(self.settings.update_check_enabled),
         )
         yield MenuItem(t("dlg_sound_menu"), Menu(*self._sound_items()))
+        yield MenuItem(t("dlg_att_section"), Menu(*self._attention_options()))
         if costs.platform_supported() and costs.runner_available(
             self.settings.cost.command
         ):
@@ -896,6 +1036,34 @@ class TrayApp:
             self._queued(self._toggle_startup),
             checked=_flag(winshell.startup_enabled()),
         )
+
+    def _attention_options(self):
+        """The blink toggle, plus the hook registration it depends on."""
+        if self._hooks_installed is None:
+            # Menu build runs on the message-loop thread, so this has to stay
+            # a small file read — same budget as the registry lookup the
+            # startup row already does two rows below.
+            self._refresh_hook_state()
+        installed = self._hooks_installed
+        yield MenuItem(
+            t("dlg_att_enabled"),
+            self._queued(self._toggle_attention),
+            checked=_flag(self.settings.attention.enabled),
+        )
+        yield Menu.SEPARATOR
+        yield MenuItem(
+            t("dlg_att_hooks_ok") if installed else t("dlg_att_hooks_missing"),
+            None,
+            enabled=False,
+        )
+        if installed:
+            yield MenuItem(
+                t("dlg_att_hooks_remove"), self._queued(self._on_remove_hooks)
+            )
+        else:
+            yield MenuItem(
+                t("dlg_att_hooks_install"), self._queued(self._on_install_hooks)
+            )
 
     def _sound_items(self):
         snd = self.settings.sound
@@ -972,6 +1140,57 @@ class TrayApp:
             if self.cost_report is None:
                 self.cost_report = costs.cached()
             self._refresh_costs()
+
+    def _toggle_attention(self) -> None:
+        att = dataclasses.replace(
+            self.settings.attention, enabled=not self.settings.attention.enabled
+        )
+        self._save_and_apply(dataclasses.replace(self.settings, attention=att))
+        if not att.enabled:
+            self._rest()
+            return
+        # Turning the blink on with no hooks registered would look broken —
+        # nothing would ever flag a session. Say so rather than let the user
+        # discover it by waiting.
+        self._refresh_hook_state()
+        if not self._hooks_installed:
+            self.notify(t("dlg_att_section"), t("dlg_att_hooks_missing"))
+
+    def _refresh_hook_state(self) -> None:
+        self._hooks_installed = attention_hooks.installed()
+
+    def _on_install_hooks(self) -> None:
+        """Confirm, merge into ~/.claude/settings.json, then prove it works."""
+        if not winshell.confirm(
+            t("dlg_att_hooks_confirm_title"), t("dlg_att_hooks_confirm_body")
+        ):
+            return
+        result = attention_hooks.install()
+        self._refresh_hook_state()
+        self.icon.update_menu()
+        if not result.ok:
+            self.notify(
+                t("dlg_att_section"), t("dlg_att_hooks_failed", err=result.detail)
+            )
+            return
+        # The hook only ever runs inside Claude Code's own shell, so a quoting
+        # mistake would otherwise present as "it just never blinks".
+        test = attention_hooks.selftest()
+        self.notify(
+            t("dlg_att_section"),
+            t("dlg_att_hooks_ok")
+            if test.ok
+            else t("dlg_att_hooks_failed", err=test.detail),
+        )
+
+    def _on_remove_hooks(self) -> None:
+        result = attention_hooks.uninstall()
+        self._refresh_hook_state()
+        self._on_clear_attention()
+        if not result.ok:
+            self.notify(
+                t("dlg_att_section"), t("dlg_att_hooks_failed", err=result.detail)
+            )
 
     def _toggle_sound_enabled(self) -> None:
         snd = dataclasses.replace(
