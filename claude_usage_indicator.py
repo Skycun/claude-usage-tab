@@ -34,6 +34,7 @@ import shlex
 import subprocess
 import sys
 import threading
+import time
 import webbrowser
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -47,6 +48,8 @@ from gi.repository import AyatanaAppIndicator3 as AppIndicator  # noqa: E402
 from gi.repository import GLib, Gtk, Notify  # noqa: E402
 
 import accounts  # noqa: E402
+import attention  # noqa: E402
+import handoff  # noqa: E402
 from alerts import History, evaluate_alerts  # noqa: E402
 import costs  # noqa: E402
 from api import (  # noqa: E402
@@ -67,10 +70,12 @@ from settings import (  # noqa: E402
 from strings import current_lang, detect_lang, set_lang, setup_locale, t  # noqa: E402
 from topbar import compose_label  # noqa: E402
 from formatting import (  # noqa: E402
+    format_account_usage,
     format_cost,
     format_local,
     format_remaining,
     format_stamp,
+    format_switch_confirm,
     fmt_secs as _fmt_secs,
     progress_bar,
     to_float,
@@ -88,6 +93,12 @@ ASSETS_DIR = INSTALL_DIR / "assets"
 # then re-checks on this cadence. The GLib timer and updates.check()'s own
 # cache-staleness threshold share one constant so they can't drift apart.
 UPDATE_CHECK_DELAY = 5
+
+# Terminal-attention blink (see ``attention.py``). The idle beat is how long
+# we wait between flag scans while nothing is flagged — a hook fires the
+# instant a turn ends, so this must not ride the usage poll.
+ATTENTION_IDLE_MS = 1000
+ATTENTION_RESCAN_SECONDS = 1.0
 UPDATE_CHECK_PERIOD = updates.PERIODIC_INTERVAL
 # Snapshot the history to disk every Nth tick (~10 min at the default cadence).
 HISTORY_SNAPSHOT_EVERY = 5
@@ -214,6 +225,19 @@ class Indicator:
         self._settings_window: Gtk.Window | None = None
         self._poll_source_id: int | None = None
 
+        # Terminal-attention blink. The source is only registered while the
+        # feature is on, so a default install runs exactly the code it ran
+        # before this existed.
+        self._attention = attention.Snapshot()
+        self._blink_source_id: int | None = None
+        self._blink_on = False
+        self._att_next_scan = 0.0
+
+        # Standing offer to hand the work to another account when the active
+        # one runs dry; the flag keeps the notification to one per episode.
+        self._offer: handoff.Offer | None = None
+        self._offer_notified = False
+
         self.ind = AppIndicator.Indicator.new(
             APP_ID,
             pick_icon(0, 0),
@@ -227,6 +251,7 @@ class Indicator:
         self._apply_update_ui()  # reflect any cached "update available" now
         self._apply_cost_ui()  # ditto for the last known cost figures
         self.ind.set_menu(self.menu)
+        self.sync_blink_timer()
         Notify.init(APP_ID)
 
     # ---------------------------------------------------------------- menu
@@ -280,6 +305,18 @@ class Indicator:
         self.item_clear_alerts = Gtk.MenuItem(label=t("clear_alerts"))
         self.item_clear_alerts.connect("activate", self._on_clear_alerts)
 
+        # Limit-reached handoff — hidden until the active account runs dry
+        # and another one has room.
+        self.item_offer = Gtk.MenuItem(label="")
+        self.item_offer.connect("activate", self._on_offer_clicked)
+        self.sep_offer = Gtk.SeparatorMenuItem()
+
+        # Terminal-attention block — hidden until a session is flagged.
+        self.item_attention = self._info_item("")
+        self.item_attention_clear = Gtk.MenuItem(label=t("att_clear"))
+        self.item_attention_clear.connect("activate", self._on_clear_attention)
+        self.sep_attention = Gtk.SeparatorMenuItem()
+
         # Update-available row — hidden until a newer release is detected.
         self.item_update = Gtk.MenuItem(label=t("update_available", ver="?"))
         self.item_update.connect("activate", self._on_update_clicked)
@@ -303,6 +340,11 @@ class Indicator:
             self.item_extra,
             self.item_accounts,
             self.item_costs,
+            self.sep_offer,
+            self.item_offer,
+            self.sep_attention,
+            self.item_attention,
+            self.item_attention_clear,
             self.sep_alerts,
             self.item_active_alerts,
             self.item_clear_alerts,
@@ -326,9 +368,21 @@ class Indicator:
             self.item_active_alerts,
             self.item_clear_alerts,
         )
+        self._attention_only = (
+            self.sep_attention,
+            self.item_attention,
+            self.item_attention_clear,
+        )
+        self._offer_only = (self.sep_offer, self.item_offer)
         self.menu.show_all()
         # Alert block is hidden until an alert fires.
         for item in self._alert_only:
+            item.hide()
+        # Attention block is hidden until a Claude terminal flags itself.
+        for item in self._attention_only:
+            item.hide()
+        # Offer row is hidden until the active account is actually blocked.
+        for item in self._offer_only:
             item.hide()
         # Extra row hidden by default — only shown when extra credits enabled.
         self.item_extra.hide()
@@ -380,6 +434,36 @@ class Indicator:
         self.item_active_alerts.set_label(labels)
         for item in self._alert_only:
             item.show()
+
+    def _refresh_attention_menu(self) -> None:
+        """Show or hide the "terminals waiting" block, and label it."""
+        snap = self._attention
+        if not (self.settings.attention.enabled and snap.total):
+            for item in self._attention_only:
+                item.hide()
+            return
+        parts = []
+        if snap.waiting:
+            parts.append(t("att_tip_waiting", n=len(snap.waiting)))
+        if snap.done:
+            parts.append(t("att_tip_done", n=len(snap.done)))
+        self.item_attention.set_label("  ·  ".join(parts))
+        for item in self._attention_only:
+            item.show()
+
+    def _on_clear_attention(self, _item: Gtk.MenuItem) -> None:
+        attention.clear_all()
+        self._attention = attention.Snapshot()
+        self._att_next_scan = time.monotonic() + ATTENTION_RESCAN_SECONDS
+        self._rest()
+        self._refresh_attention_menu()
+
+    def _attention_prefix(self) -> str:
+        """ASCII state marker for the top-bar label, or "" when idle."""
+        if not self.settings.attention.enabled:
+            return ""
+        mark = attention.marker(self._attention.kind)
+        return f"{mark} " if mark else ""
 
     def _on_login_clicked(self, _item: Gtk.MenuItem) -> None:
         if spawn_claude_login():
@@ -613,12 +697,84 @@ class Indicator:
             self._poll_source_id = None
         self.start_poll_timer()
 
+    # ------------------------------------------------------- attention blink
+
+    def sync_blink_timer(self) -> None:
+        """Register or drop the blink source to match the current setting."""
+        if self.settings.attention.enabled:
+            if self._blink_source_id is None:
+                self._schedule_blink()
+            return
+        if self._blink_source_id is not None:
+            GLib.source_remove(self._blink_source_id)
+            self._blink_source_id = None
+        self._attention = attention.Snapshot()
+        self._rest()
+
+    def _schedule_blink(self) -> None:
+        """Arm the next beat.
+
+        A self-rescheduling one-shot rather than a repeating source: the
+        cadence depends on *what* is flagged (a blocked session beats faster
+        than a finished one), and a GLib timeout cannot change its own
+        interval in place.
+        """
+        self._blink_source_id = GLib.timeout_add(
+            self._blink_interval_ms(), self._blink_tick
+        )
+
+    def _blink_interval_ms(self) -> int:
+        att = self.settings.attention
+        kind = self._attention.kind
+        if kind is None:
+            return ATTENTION_IDLE_MS
+        return att.waiting_ms if kind == attention.KIND_WAITING else att.blink_ms
+
+    def _blink_tick(self) -> bool:
+        try:
+            self._blink_step()
+        except Exception as e:  # noqa: BLE001 — a blink must not kill the daemon
+            print(f"blink error: {type(e).__name__}: {e}", file=sys.stderr)
+        self._blink_source_id = None
+        if self.settings.attention.enabled:
+            self._schedule_blink()
+        return False  # this source is done; the reschedule replaces it
+
+    def _blink_step(self) -> None:
+        att = self.settings.attention
+        now = time.monotonic()
+        if now >= self._att_next_scan:
+            previous = self._attention
+            self._attention = attention.scan(att.expire_minutes)
+            self._att_next_scan = now + ATTENTION_RESCAN_SECONDS
+            if self._attention.kind != previous.kind or (
+                self._attention.total != previous.total
+            ):
+                self._refresh_attention_menu()
+
+        if self._attention.kind is None:
+            self._rest()
+            return
+
+        self._blink_on = not self._blink_on
+        icon = _gray_icon() if self._blink_on else (self.current_icon or _gray_icon())
+        self.ind.set_icon_full(icon, "Claude usage")
+
+    def _rest(self) -> None:
+        """Put the resting icon back if a blink left the other frame up."""
+        if not self._blink_on:
+            return
+        self._blink_on = False
+        self.ind.set_icon_full(self.current_icon or _gray_icon(), "Claude usage")
+
     def _relabel_static(self) -> None:
         """Re-translate menu items that don't refresh on the render path."""
         self.item_login.set_label(t("login_item"))
         self.item_clear_alerts.set_label(t("clear_alerts"))
+        self.item_attention_clear.set_label(t("att_clear"))
         self.item_edit_settings.set_label(t("edit_settings"))
         self._apply_cost_ui()
+        self._refresh_attention_menu()
 
     def _apply_loaded_settings(self, old: Settings) -> None:
         """React to a freshly loaded ``self.settings`` (lang, poll cadence)."""
@@ -635,6 +791,9 @@ class Indicator:
             if self.settings.cost.enabled and self.cost_report is None:
                 self.cost_report = costs.cached()
             self._apply_cost_ui()
+        if old.attention != self.settings.attention:
+            self.sync_blink_timer()
+            self._refresh_attention_menu()
 
     def _reload_settings_if_needed(self) -> None:
         """Pick up external edits to settings.json (mtime-watched)."""
@@ -824,12 +983,13 @@ class Indicator:
             self.settings.topbar,
             bool(self.active_alerts),
         )
+        prefix = self._attention_prefix()
         if body is None:
             self.ind.set_label(
-                t("label_not_connected"), t("label_not_connected")
+                prefix + t("label_not_connected"), t("label_not_connected")
             )
         else:
-            self.ind.set_label(body, guide)
+            self.ind.set_label(prefix + body, guide)
 
         # --- Update icon based on the current utilisation ---
         self._update_icon(claude_state)
@@ -843,6 +1003,68 @@ class Indicator:
 
         # --- Multi-account submenu ---
         self._render_accounts(account_states or [])
+
+        # --- Limit-reached handoff offer ---
+        self._refresh_offer(claude_state, account_states or [])
+
+    # -- limit-reached handoff offer -------------------------------------
+
+    def _refresh_offer(
+        self, claude_state: dict | None, account_states: list[dict]
+    ) -> None:
+        """Work out whether to offer a switch, and say so once per episode.
+
+        Only meaningful with the switcher enabled: proposing a move the user
+        has not allowed would advertise a disabled feature.
+        """
+        enabled = (
+            self.settings.accounts_enabled and self.settings.account_switch_enabled
+        )
+        if enabled:
+            data = (claude_state or {}).get("data") or {}
+            active_util = to_float((data.get("five_hour") or {}).get("utilization"))
+            candidates = [
+                (
+                    st["acct"].id,
+                    st["acct"].email or st["acct"].label,
+                    to_float(
+                        ((st.get("data") or {}).get("five_hour") or {}).get(
+                            "utilization"
+                        )
+                    ),
+                )
+                for st in account_states
+                if not st.get("active") and st.get("status") == "ok" and st.get("data")
+            ]
+            self._offer = handoff.pick_offer(active_util, candidates)
+        else:
+            self._offer = None
+
+        if self._offer is None:
+            # Cleared on the way back down, so the next limit notifies again.
+            self._offer_notified = False
+            for item in self._offer_only:
+                item.hide()
+            return
+
+        self.item_offer.set_label(t("ho_offer_row", email=self._offer.email))
+        for item in self._offer_only:
+            item.show()
+        if not self._offer_notified:
+            self._offer_notified = True
+            self.notify(
+                t("ho_offer_title"),
+                t(
+                    "ho_offer_body",
+                    email=self._offer.email,
+                    util=int(self._offer.util),
+                ),
+            )
+
+    def _on_offer_clicked(self, _item: Gtk.MenuItem) -> None:
+        offer = self._offer
+        if offer is not None:
+            self._on_switch_account(offer.account_id, offer.email)
 
     # -- accounts --------------------------------------------------------
 
@@ -925,9 +1147,14 @@ class Indicator:
         status = st.get("status")
         if status == "ok" and st.get("data"):
             data = st["data"]
-            five = to_float((data.get("five_hour") or {}).get("utilization"))
-            seven = to_float((data.get("seven_day") or {}).get("utilization"))
-            return t("acct_usage", five=five, seven=seven)
+            five = data.get("five_hour") or {}
+            seven = data.get("seven_day") or {}
+            return format_account_usage(
+                to_float(five.get("utilization")),
+                to_float(seven.get("utilization")),
+                parse_iso(five.get("resets_at")),
+                parse_iso(seven.get("resets_at")),
+            )
         if status == "rate_limited":
             return t("acct_usage_rl")
         if status == "expired":
@@ -960,6 +1187,7 @@ class Indicator:
             )
         sub.append(switch_item)
 
+
         forget_item = Gtk.MenuItem(label=t("acct_forget"))
         if active:
             forget_item.set_sensitive(False)
@@ -974,9 +1202,18 @@ class Indicator:
         return item
 
     def _on_switch_account(self, acct_id: str, email: str) -> None:
+        """Confirm once, then swap.
+
+        The running-session count rides inside the confirmation body
+        (non-negotiable 8): it says what the switch is about to move, and
+        the default answer is yes. Open terminals follow the credentials
+        file, which is the point of the feature, not a hazard, so it does
+        not deserve a warning of its own.
+        """
+        probe = handoff.running_sessions()
         if not self._confirm(
             t("acct_switch_confirm_title"),
-            t("acct_switch_confirm_body", email=email),
+            format_switch_confirm(email, probe.count, probe.known),
         ):
             return
         if accounts.switch_to(acct_id, datetime.now(timezone.utc)):

@@ -90,13 +90,22 @@ def spawn(argv: list[str], *, console: bool = False) -> bool:
     ``console`` shows a window (update/uninstall, where the user needs to read
     the output); without it the child is fully silent, which is what audio
     playback and other background helpers want.
+
+    **``stdin`` follows ``console``, and it is not a detail.** A background
+    helper must not inherit stdin, hence ``DEVNULL`` there. But a child given
+    its own console needs that console's keyboard: hand it ``DEVNULL`` and it
+    reads end-of-file on its first prompt and exits, which looks exactly like
+    a window flashing open and vanishing. Passing ``None`` sets no handles at
+    all in ``STARTUPINFO``, so Windows wires the child to the console it just
+    created — which is what lets ``run_script_in_console`` actually hold its
+    window open on a ``Read-Host`` instead of closing in the user's face.
     """
     try:
         subprocess.Popen(
             argv,
             creationflags=CREATE_NEW_CONSOLE if console else CREATE_NO_WINDOW,
             close_fds=True,
-            stdin=subprocess.DEVNULL,
+            stdin=None if console else subprocess.DEVNULL,
             stdout=None if console else subprocess.DEVNULL,
             stderr=None if console else subprocess.DEVNULL,
         )

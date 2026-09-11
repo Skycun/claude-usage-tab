@@ -27,6 +27,9 @@ claude_usage_tray.py         # Windows: pystray tray app (same engine)
 topbar.py                    # top-bar label composition (settings-driven)
 formatting.py                # shared pure render helpers (durations, bars, to_float)
 sound.py                     # shared 80%-session flourish engine (audio + image, all 3)
+attention.py                 # Claude Code hook + flag store: which terminals want you back
+attention_hooks.py           # registers those hooks in ~/.claude/settings.json (2nd write surface)
+handoff.py                   # running-session probe + when a switch is worth offering
 trayicon.py                  # Windows: percentage badge / logo images (Pillow only)
 winshell.py                  # Windows: dialogs, file picker, autostart, launching
 settings_dialog.py           # GTK settings window
@@ -110,6 +113,63 @@ never a crash. The figures are an estimate of what that traffic would cost
 on the API (all CLI agents ccusage detects, not just Claude); it is not a
 bill and has nothing to do with the plan limits shown above.
 
+Terminal attention (``attention.py`` + ``attention_hooks.py``): blink the
+icon while a Claude Code terminal has finished its turn or is stuck on a
+permission prompt. **Opt-in** (``attention.enabled``, off by default) and it
+needs hooks registered in ``~/.claude/settings.json`` — see non-negotiable 7
+for the rules that write is held to. Five events are hooked: ``Stop`` flags
+the session as *done*, ``Notification`` as *waiting*, and ``PostToolUse`` /
+``UserPromptSubmit`` / ``SessionEnd`` clear it. ``PostToolUse`` is in that
+list because **answering is not prompting**: a permission prompt is cleared
+by approving it and an ``AskUserQuestion`` by picking an option, and neither
+fires ``UserPromptSubmit`` — without it the icon blinks *waiting* for the
+whole rest of a turn you already unblocked. That clear skips a flag younger
+than ``SETTLE_SECONDS``: hook processes are ``async``, so a tool finishing
+next to a permission prompt would otherwise race the new flag away. Each
+event writes one small file
+under ``~/.cache/…/attention/``, named by a **sanitised** session id, holding
+the folder's basename and never the path (same hygiene rule as
+``costs.json``). *waiting* outranks *done* everywhere and blinks at half the
+period, because a blocked session is the one that actually costs you time. A
+flag nobody cleared expires after ``attention.expire_minutes`` — a terminal
+killed with ^C never fires ``SessionEnd``. The whole thing is **fail-open**:
+no hooks, no directory, or an unreadable flag means "nothing is waiting",
+never a crash. The blink lives on each front-end's own timer (worker-thread
+deadline on Windows, self-rescheduling ``GLib`` source on GNOME, fixed-beat
+``rumps.Timer`` on macOS) and never on the usage poll — a hook fires the
+instant a turn ends and two minutes of latency would defeat the point.
+One shell caveat worth remembering: **an icon parked in the notification
+area's overflow chevron cannot be seen blinking.**
+
+Account handoff (``handoff.py``): **a running ``claude`` session follows the
+credentials file.** This was assumed to be false for a long time, including
+by ``accounts.switch_to``'s own docstring, and it cost an afternoon to
+disprove: a session authenticated as one account reported the *other* one in
+``/status`` forty minutes after a swap, and refreshed that other account's
+token back into the file. So a switch moves every open terminal at once.
+There is no relaunching, no ``--continue``, no second window — an earlier
+version of this feature opened one and it was pure noise.
+
+What remains is small. ``running_sessions`` counts live sessions so the
+confirmation can say what the switch is about to affect; it is a heads-up,
+never a gate, and ``known=False`` (the probe could not run) is worded
+differently from zero. It rides inside **one** confirmation dialog
+(``formatting.format_switch_confirm``), not a warning of its own: terminals
+following the swap is the feature, and an earlier version that said the
+opposite — "a running session will not switch live" — was simply wrong. A process is a Claude session when its executable is
+named ``claude`` (the native installer drops ``claude.exe`` in
+``~/.local/bin``) or its command line names the npm CLI entry point, and
+never when it is one of ours. ``pick_offer`` holds the policy: at
+``LIMIT_UTIL`` (100%) on the five-hour window, offer the stored account with
+the most room, and only if it is under ``ROOM_UTIL`` (90%) — an account
+already at 92% buys minutes, not an afternoon. The offer surfaces as a
+notification plus a row at the top of the menu, once per limit episode.
+
+The follow-the-file behaviour is **undocumented**, exactly like the usage
+endpoint. Treat it as observed, not guaranteed: if a future Claude Code pins
+its credentials at startup, the switch quietly degrades to "next launch
+only", which makes the feature less useful and never harmful.
+
 Windows tray (``claude_usage_tray.py``): the notification area gives you an
 icon and a tooltip and nothing else, so the **number is drawn into the
 icon** (``trayicon.badge``) — one number only, the highest of the selected
@@ -129,6 +189,15 @@ switches back to the plain logo. Four constraints are not negotiable there:
   every click *and* we rebuild it after every poll, both landing in an
   unlocked ``_update_menu`` that destroys and recreates the ``HMENU``. Hence
   the mutex in ``_Icon``.
+* **Every file read and write names ``encoding="utf-8"``.** Windows resolves
+  the default text encoding to the ANSI code page (``cp1252`` here), so a
+  bare ``read_text()`` on a JSON file throws ``UnicodeDecodeError`` the
+  moment the file holds a byte that page does not define. ``~/.claude.json``
+  is rewritten constantly and does hold such bytes, which made this an
+  *intermittent* dead tick rather than an obvious one. ``UnicodeDecodeError``
+  is not caught by ``except json.JSONDecodeError``; name it, or catch
+  ``ValueError``.
+
 * **Under ``pythonw.exe`` there is no stderr.** ``sys.stderr`` is ``None``
   and ``print(..., file=None)`` silently does nothing, so every diagnostic
   would vanish — autostart always launches that way. ``_setup_logging``
@@ -150,7 +219,9 @@ Runtime files (never committed):
 - ``~/.config/claude-usage-indicator/accounts.json`` — token-free account index (email/plan/label)
 - ``~/.config/claude-usage-indicator/accounts/<id>.json`` — per-account credential blob, ``0600``
 - ``~/.cache/claude-usage-indicator/costs.json`` — per-day API cost amounts (``(date, amount)`` only)
+- ``~/.cache/claude-usage-indicator/attention/<session>.json`` — one flag per waiting terminal (``kind``, ``ts``, folder name)
 - ``~/.claude.json.cusi-bak`` — backup written before a switch rewrites ``~/.claude.json``
+- ``~/.claude/settings.json.cusi-bak`` — backup written before the attention hooks are merged in
 - ``%LOCALAPPDATA%/claude-usage-indicator/tray.log`` — Windows only, stderr when there's no console (capped at 1 MB)
 
 ---
@@ -197,11 +268,31 @@ Runtime files (never committed):
 7. **The account store holds several OAuth tokens — guard it like #2.**
    ``accounts/<id>.json`` files are the only place besides ``~/.claude``
    that hold tokens; write them ``0600`` and never log/echo them. The
-   ``account_switch_enabled`` flag gates the *only* code that **writes**
-   into ``~/.claude`` (``accounts.switch_to``): it replaces just
-   ``claudeAiOauth`` / ``oauthAccount``, backs up ``~/.claude.json``
-   first, writes atomically, and only affects the next ``claude`` launch.
-   Never widen that write surface, and never commit the store or backup.
+   ``account_switch_enabled`` flag gates one of the *two* pieces of code
+   that **write** into ``~/.claude`` (``accounts.switch_to``): it replaces
+   just ``claudeAiOauth`` / ``oauthAccount``, backs up ``~/.claude.json``
+   first, and writes atomically. It takes effect in every open terminal,
+   not only at the next ``claude`` launch — see non-negotiable 8.
+   Never commit the store or backup.
+
+   **The second write surface is ``attention_hooks``**, and it is the only
+   other one there will be. It touches exactly one key
+   (``hooks``) of ``~/.claude/settings.json``, only ever on an explicit
+   click, after a confirmation, and after backing the file up to
+   ``settings.json.cusi-bak``. The merge is additive (the user's own hooks
+   for the same events are preserved) and the uninstall removes only
+   entries whose command names our own ``attention.py``. Anything that
+   would widen this — writing another key, editing project-level settings,
+   registering a hook that isn't ours — is out of bounds. ``handoff`` reads
+   ``~/.claude`` and never writes to it; keep it that way.
+
+8. **Every ``accounts.switch_to`` caller runs ``handoff.running_sessions``
+   first and puts the answer in front of the user.** A switch is not a local
+   act: open sessions follow the credentials file, so it moves every terminal
+   the user has running. Say how many in the confirmation itself, then
+   proceed — the default answer is yes. Treat ``known=False`` the same as
+   busy, never as "all clear". No string anywhere may claim the switch waits
+   for the next launch.
 
 ---
 
@@ -223,6 +314,30 @@ tail -f /tmp/claude_usage_indicator.log
 
 There are no unit tests. On Linux the only way to verify is to run the
 daemon and look at the GNOME top bar.
+
+The attention flags need no Claude session to exercise — the hook reads a
+JSON payload on stdin, so you can fire one by hand and watch the front-end
+react:
+
+```bash
+echo '{"hook_event_name":"Stop","session_id":"probe","cwd":"/tmp/demo"}' \
+  | python3 attention.py hook
+python3 attention.py status          # {"waiting": 0, "done": 1, ...}
+python3 attention.py clear
+python3 attention_hooks.py status    # is it registered, and with which command?
+python3 attention_hooks.py selftest  # run the real command through the shell
+```
+
+The handoff module is equally inspectable from a shell, and worth checking
+on any machine where the switch misbehaves:
+
+```bash
+python3 handoff.py probe      # sessions=2 known=True
+```
+
+``selftest`` is the one that matters after touching ``command()``: the hook
+only ever runs inside Claude Code's own shell, so a quoting mistake shows up
+as "the icon never blinks" with nothing in any log to explain it.
 
 The Windows front-end *can* be exercised without Windows, which is how it
 was written — real ``pystray`` on its dummy backend, a fake ``HOME``, a

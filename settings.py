@@ -50,11 +50,21 @@ DEFAULT_SOUND_MODE = "kylian"
 DEFAULT_COST_REFRESH_MINUTES = 15
 MIN_COST_REFRESH_MINUTES = 1
 
+# Terminal-attention blink (see ``attention.py``). The "done" cadence is the
+# stored one; "waiting" blinks at half of it, because a session stuck on a
+# permission prompt is the one actually blocked. Floor and ceiling exist so a
+# hand-edited file can't produce a strobe or a cadence slower than the poll.
+DEFAULT_BLINK_MS = 600
+MIN_BLINK_MS = 200
+MAX_BLINK_MS = 3000
+DEFAULT_ATTENTION_EXPIRE_MINUTES = 60
+MIN_ATTENTION_EXPIRE_MINUTES = 1
+
 # v2 introduced the ``topbar`` block; v3 introduced the ``sound`` block (and
 # retired the flat ``sound_80`` string, migrated on load); v4 introduced the
-# ``cost`` block. Older files load fine — new keys default gracefully via
-# ``.get(...)``.
-SCHEMA_VERSION = 4
+# ``cost`` block; v5 introduced the ``attention`` block. Older files load fine
+# — new keys default gracefully via ``.get(...)``.
+SCHEMA_VERSION = 5
 
 
 @dataclass(frozen=True)
@@ -126,6 +136,30 @@ class CostSettings:
 
 
 @dataclass(frozen=True)
+class AttentionSettings:
+    """Blink the icon while a Claude Code terminal is waiting for you.
+
+    ``enabled`` gates the blink in the front-ends; it says nothing about
+    whether the hooks that feed it are registered — that lives in
+    ``~/.claude/settings.json`` and is read back from there, never mirrored
+    here, so the two can't drift.
+
+    ``blink_ms`` is the "turn finished" cadence; "waiting for an answer"
+    halves it. ``expire_minutes`` is the safety net for a flag nothing ever
+    cleared, e.g. a terminal killed outright.
+    """
+
+    enabled: bool = False
+    blink_ms: int = DEFAULT_BLINK_MS
+    expire_minutes: int = DEFAULT_ATTENTION_EXPIRE_MINUTES
+
+    @property
+    def waiting_ms(self) -> int:
+        """Cadence for a blocked session — faster, because it blocks."""
+        return max(MIN_BLINK_MS, self.blink_ms // 2)
+
+
+@dataclass(frozen=True)
 class Settings:
     schema_version: int = SCHEMA_VERSION
     lang: str = "en"
@@ -140,6 +174,7 @@ class Settings:
     update_check_enabled: bool = True
     sound: SoundSettings = field(default_factory=SoundSettings)
     cost: CostSettings = field(default_factory=CostSettings)
+    attention: AttentionSettings = field(default_factory=AttentionSettings)
     topbar: TopbarSettings = field(default_factory=TopbarSettings)
     alerts: tuple[AlertDef, ...] = field(default_factory=tuple)
 
@@ -162,6 +197,11 @@ DEFAULT_SETTINGS_JSON: dict[str, Any] = {
         "enabled": False,
         "command": "",
         "refresh_minutes": DEFAULT_COST_REFRESH_MINUTES,
+    },
+    "attention": {
+        "enabled": False,
+        "blink_ms": DEFAULT_BLINK_MS,
+        "expire_minutes": DEFAULT_ATTENTION_EXPIRE_MINUTES,
     },
     "topbar": {
         "show_claude": True,
@@ -193,7 +233,9 @@ def ensure_settings_file() -> None:
         return
     try:
         SETTINGS_DIR.mkdir(parents=True, exist_ok=True)
-        SETTINGS_PATH.write_text(json.dumps(DEFAULT_SETTINGS_JSON, indent=2) + "\n")
+        SETTINGS_PATH.write_text(
+            json.dumps(DEFAULT_SETTINGS_JSON, indent=2) + "\n", encoding="utf-8"
+        )
     except OSError as e:
         print(f"settings: cannot create {SETTINGS_PATH}: {e}", file=sys.stderr)
 
@@ -210,8 +252,8 @@ def load_settings() -> Settings:
     """Load the file, falling back to defaults on error."""
     ensure_settings_file()
     try:
-        raw = json.loads(SETTINGS_PATH.read_text())
-    except (json.JSONDecodeError, OSError) as e:
+        raw = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
         print(f"settings: load failed ({e}); using defaults", file=sys.stderr)
         return _from_raw(DEFAULT_SETTINGS_JSON)
     if not isinstance(raw, dict):
@@ -361,6 +403,22 @@ def _validate_cost(raw: Any) -> CostSettings:
     )
 
 
+def _validate_attention(raw: Any) -> AttentionSettings:
+    """Validate the ``attention`` block; anything odd falls back to the default."""
+    if not isinstance(raw, dict):
+        return AttentionSettings()
+    blink = _coerce_int(raw.get("blink_ms"), DEFAULT_BLINK_MS, minimum=MIN_BLINK_MS)
+    return AttentionSettings(
+        enabled=_coerce_bool(raw.get("enabled"), False),
+        blink_ms=min(blink, MAX_BLINK_MS),
+        expire_minutes=_coerce_int(
+            raw.get("expire_minutes"),
+            DEFAULT_ATTENTION_EXPIRE_MINUTES,
+            minimum=MIN_ATTENTION_EXPIRE_MINUTES,
+        ),
+    )
+
+
 def _validate_alert(raw: dict, index: int) -> AlertDef | None:
     if not isinstance(raw, dict):
         print(f"settings: alerts[{index}] must be an object", file=sys.stderr)
@@ -444,6 +502,7 @@ def _from_raw(raw: dict) -> Settings:
         update_check_enabled=_coerce_bool(raw.get("update_check_enabled"), True),
         sound=sound,
         cost=_validate_cost(raw.get("cost")),
+        attention=_validate_attention(raw.get("attention")),
         topbar=_validate_topbar(raw.get("topbar")),
         alerts=tuple(alerts),
     )
@@ -481,6 +540,14 @@ def cost_to_dict(c: CostSettings) -> dict[str, Any]:
     }
 
 
+def attention_to_dict(a: AttentionSettings) -> dict[str, Any]:
+    return {
+        "enabled": a.enabled,
+        "blink_ms": a.blink_ms,
+        "expire_minutes": a.expire_minutes,
+    }
+
+
 def topbar_to_dict(tb: TopbarSettings) -> dict[str, Any]:
     return {
         "show_claude": tb.show_claude,
@@ -506,6 +573,7 @@ def settings_to_dict(s: Settings) -> dict[str, Any]:
         "update_check_enabled": s.update_check_enabled,
         "sound": sound_to_dict(s.sound),
         "cost": cost_to_dict(s.cost),
+        "attention": attention_to_dict(s.attention),
         "topbar": topbar_to_dict(s.topbar),
         "alerts": [alert_to_dict(a) for a in s.alerts],
     }
@@ -518,4 +586,6 @@ def save_settings(s: Settings) -> None:
     user — we never swallow it silently here.
     """
     SETTINGS_DIR.mkdir(parents=True, exist_ok=True)
-    SETTINGS_PATH.write_text(json.dumps(settings_to_dict(s), indent=2) + "\n")
+    SETTINGS_PATH.write_text(
+        json.dumps(settings_to_dict(s), indent=2) + "\n", encoding="utf-8"
+    )

@@ -168,6 +168,13 @@ logs, and the known caveats.
   have cost on the API, plus rolling 7 days and this month, computed
   locally by [ccusage](https://github.com/ryoppippi/ccusage). →
   [API cost](#api-cost)
+- 🔴 **Blink when a terminal wants you** *(opt-in)* — the icon pulses as
+  soon as one of your Claude Code sessions finishes its turn or stops on a
+  permission prompt, and stops the moment you answer it. →
+  [Terminal attention](#terminal-attention)
+- 🔁 **Switch and carry on** — hit the 5 h limit? One click moves every open
+  terminal to another account, and the app offers it to you the moment you're
+  blocked. → [Multiple accounts](#multiple-accounts)
 - 👥 **Multi-account switcher** — remembers every Claude account you sign
   in as, shows each one's usage, and (opt-in) switches which account
   Claude Code uses next. → [Multiple accounts](#multiple-accounts)
@@ -344,6 +351,52 @@ wrapper script…).
 
 ---
 
+## Terminal attention
+
+When you run Claude Code in several terminals, the one that finished three
+minutes ago is invisible until you go looking. Turn this on and the icon
+blinks instead.
+
+**Two states, told apart on sight:**
+
+| What happened | Colour (Windows) | Marker (GNOME / macOS) | Rhythm |
+|---|---|---|---|
+| A session is waiting for an answer — a permission prompt, or a minute of silence | blue | `!` | fast |
+| A session finished its turn | green | `*` | half as fast |
+
+Waiting always wins: it is the state that is actually blocking work.
+
+**Turning it on**
+
+1. Open **Options ▸ Claude terminals** (the settings window on Linux).
+2. Click **Install the Claude Code hooks**, and confirm.
+3. Tick **Blink when a terminal wants me**.
+
+**What the hooks do**
+
+The blink is fed by five Claude Code hooks added to
+`~/.claude/settings.json`: `Stop` and `Notification` raise a flag for the
+session, `PostToolUse`, `UserPromptSubmit` and `SessionEnd` clear it. So the
+blink stops on its own the moment that terminal starts moving again — your
+next prompt, but also the permission you just approved or the question you
+just answered — you never have to dismiss it. The dropdown lists which
+project each waiting terminal belongs to, with a **Stop blinking** row if you
+want to silence them all.
+
+**Good to know**
+
+- Your existing hooks are left alone. The merge is additive, and the file is
+  backed up to `settings.json.cusi-bak` first. **Remove the Claude Code
+  hooks** takes out only the entries this app added.
+- **On Windows, an icon hidden in the overflow chevron can't be seen
+  blinking.** Drag it onto the taskbar first.
+- Flags live in `~/.cache/claude-usage-indicator/attention/` and hold the
+  project folder's name, never its path. A flag nothing cleared (a terminal
+  killed outright) expires after an hour.
+- No hooks installed means no flags, which means no blink — never an error.
+
+---
+
 ## Multiple accounts
 
 Claude Code only stores **one** active account at a time — signing in as
@@ -354,9 +407,11 @@ between them.
   you sign in as a different account the daemon snapshots it on the next
   tick. Nothing to click.
 - **See every account's usage.** A **Claude accounts** submenu lists them
-  all with their 5h / 7d usage; the active one is marked `●`. Inactive
-  accounts are polled too (their token is refreshed automatically when it
-  expires).
+  all with their 5 h / 7 d usage *and how long until each window resets*
+  (`5h 100% ↳ 51min · 7j 11% ↳ 6j 17h`); the active one is marked `●`.
+  Inactive accounts are polled too (their token is refreshed automatically
+  when it expires). The countdown is the point: a percentage tells you that
+  you're stuck, the countdown tells you whether to wait or to switch.
 - **Switch (opt-in).** Turn on **Allow switching accounts** in the
   *Accounts* tab first — it's off by default because it **writes into
   `~/.claude`**. Then pick an account → **Switch to this account**. The
@@ -365,6 +420,34 @@ between them.
 
 > Switching takes effect on the **next** `claude` launch — a running
 > session won't switch mid-flight.
+
+### Switch and carry on
+
+You hit the 5 h limit mid-task and your other account still has room.
+
+**The app offers it.** At 100 % on the 5 h window, if another stored account
+is below 90 %, you get a notification and a row at the top of the menu:
+*Limit reached — switch to …*. One click and it's done. No digging through
+submenus at the moment you're blocked.
+
+**Your open terminals come with you.** This is the part that makes it worth
+doing: Claude Code re-reads its credentials while it runs, so a switch moves
+the sessions you already have open, not just the next one you start. Nothing
+is relaunched and no window is opened. Your conversation carries on where it
+was, on the other account's quota.
+
+Before switching, the app counts the running `claude` processes and tells you
+how many are about to change account. That's information, not a barrier: the
+default answer is yes. If the check can't run, it says so rather than
+pretending nothing is open.
+
+> This relies on undocumented Claude Code behaviour, the same way the usage
+> figures do. It was verified by observation, not promised by anyone. If a
+> future version pins credentials at startup, the switch would apply to your
+> next launch only.
+
+One judgement call is yours: rotating accounts to keep working past a limit
+sits in a grey area of Anthropic's usage policy.
 
 Stored accounts live in `~/.config/claude-usage-indicator/accounts/`
 (`chmod 0600` — they contain OAuth tokens, so treat them like
@@ -440,6 +523,9 @@ alerts.py                   # usage history + custom-alert engine
 updates.py / version.py     # GitHub release check + version
 costs.py                    # daily API cost via ccusage (opt-in)
 sound.py                    # 80% flourish, all three platforms
+attention.py                # Claude Code hook + flag store (terminal attention)
+attention_hooks.py          # registers those hooks in ~/.claude/settings.json
+handoff.py                  # running-session probe + when to offer a switch
 trayicon.py                 # Windows: draws the percentage badge (Pillow)
 winshell.py                 # Windows: dialogs, autostart, launching (ctypes)
 install.sh / update.sh / uninstall.sh                  # Linux

@@ -66,7 +66,7 @@ class Account:
 
 def _load_json(path: Path) -> dict | list | None:
     try:
-        return json.loads(path.read_text())
+        return json.loads(path.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError):
         return None
 
@@ -99,7 +99,7 @@ def _atomic_write_json(path: Path, data: object, *, mode: int) -> None:
     tmp = path.parent / (path.name + ".tmp")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
     try:
-        with os.fdopen(fd, "w") as f:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(json.dumps(data, indent=2))
         os.chmod(tmp, mode)  # enforce mode even if the temp file pre-existed
     except OSError:
@@ -277,16 +277,18 @@ def refresh(acct_id: str) -> str | None:
 
 
 def switch_to(acct_id: str, now: datetime) -> bool:
-    """Make ``acct_id`` the active account for the *next* ``claude`` launch.
+    """Make ``acct_id`` the active account, in every terminal at once.
 
     Snapshots the current active account first (so nothing is lost), then
     replaces ``claudeAiOauth`` in ``~/.claude/.credentials.json`` and
     ``oauthAccount`` in ``~/.claude.json`` — every other key is preserved.
     ``~/.claude.json`` is backed up to ``~/.claude.json.cusi-bak`` first.
 
-    A running ``claude`` session won't switch mid-flight; this only affects
-    the next launch. Returns ``False`` if the target has no usable token or a
-    write fails.
+    Sessions already running **do** follow this: Claude Code re-reads the
+    credentials file while it runs, so a switch moves every open terminal, not
+    only the next launch. That was verified by observation and is undocumented
+    — see ``handoff`` for the caveat. Returns ``False`` if the target has no
+    usable token or a write fails.
     """
     # Never lose the account we're leaving.
     capture(now)

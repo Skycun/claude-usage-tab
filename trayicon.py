@@ -39,6 +39,15 @@ COLOR_CRIT = (229, 72, 77)       # #E5484D
 COLOR_STALE = (138, 138, 142)    # #8A8A8E
 TEXT_COLOR = (255, 255, 255, 255)
 
+# Attention fills, for the half-cycle where the icon blinks because a Claude
+# terminal wants you back. Deliberately outside the terracotta/amber/red
+# utilisation ramp: a blink must never read as "you're near a limit". Green
+# says the turn is done, blue says a session is blocked on an answer.
+COLOR_ATTENTION = {
+    "done": (63, 185, 80),       # #3FB950
+    "waiting": (79, 140, 255),   # #4F8CFF
+}
+
 WARN_AT = 80
 CRIT_AT = 95
 
@@ -145,6 +154,34 @@ def logo(path: Path, size: int = ICON_SIZE) -> Image.Image | None:
             return src.convert("RGBA").resize((size, size), Image.LANCZOS)
     except (OSError, ValueError):
         return None
+
+
+def attention_color(kind: str) -> tuple[int, int, int]:
+    """Blink fill for an attention state; unknown states read as "done"."""
+    return COLOR_ATTENTION.get(kind, COLOR_ATTENTION["done"])
+
+
+def attention_badge(
+    text: str,
+    kind: str,
+    size: int = ICON_SIZE,
+) -> Image.Image:
+    """The blink frame: same glyph, attention fill.
+
+    Keeping the text identical to the resting frame is the point — the number
+    stays readable through the whole blink, only the colour pulses, so a
+    glance still tells you where you are on your quota.
+    """
+    return badge(text, attention_color(kind), size)
+
+
+def attention_dot(kind: str, size: int = ICON_SIZE) -> Image.Image:
+    """Blink frame for icon-only mode: a filled tile, no glyph.
+
+    The logo has no colour we can pulse without redrawing it, so the blink
+    alternates the logo with this instead.
+    """
+    return badge(" ", attention_color(kind), size)
 
 
 def fallback(size: int = ICON_SIZE) -> Image.Image:

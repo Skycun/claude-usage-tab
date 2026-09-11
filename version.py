@@ -16,9 +16,9 @@ _FALLBACK = "1.3.0"
 def current_version() -> str:
     """Return the app version string (e.g. ``"1.1.0"``)."""
     try:
-        v = (Path(__file__).resolve().parent / "VERSION").read_text().strip()
-        return v or _FALLBACK
-    except OSError:
+        path = Path(__file__).resolve().parent / "VERSION"
+        return path.read_text(encoding="utf-8").strip() or _FALLBACK
+    except (OSError, UnicodeDecodeError):
         return _FALLBACK
 
 
