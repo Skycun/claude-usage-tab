@@ -172,6 +172,9 @@ logs, and the known caveats.
   soon as one of your Claude Code sessions finishes its turn or stops on a
   permission prompt, and stops the moment you answer it. →
   [Terminal attention](#terminal-attention)
+- 🔁 **Switch and carry on** — hit the 5 h limit? One click moves every open
+  terminal to another account, and the app offers it to you the moment you're
+  blocked. → [Multiple accounts](#multiple-accounts)
 - 👥 **Multi-account switcher** — remembers every Claude account you sign
   in as, shows each one's usage, and (opt-in) switches which account
   Claude Code uses next. → [Multiple accounts](#multiple-accounts)
@@ -404,17 +407,48 @@ between them.
   you sign in as a different account the daemon snapshots it on the next
   tick. Nothing to click.
 - **See every account's usage.** A **Claude accounts** submenu lists them
-  all with their 5h / 7d usage; the active one is marked `●`. Inactive
-  accounts are polled too (their token is refreshed automatically when it
-  expires).
+  all with their 5 h / 7 d usage *and how long until each window resets*
+  (`5h 100% ↳ 51min · 7j 11% ↳ 6j 17h`); the active one is marked `●`.
+  Inactive accounts are polled too (their token is refreshed automatically
+  when it expires). The countdown is the point: a percentage tells you that
+  you're stuck, the countdown tells you whether to wait or to switch.
 - **Switch (opt-in).** Turn on **Allow switching accounts** in the
   *Accounts* tab first — it's off by default because it **writes into
   `~/.claude`**. Then pick an account → **Switch to this account**. The
   app swaps only the credential blocks (backing up `~/.claude.json`
   first) and leaves everything else alone.
 
-> Switching takes effect on the **next** `claude` launch — a running
-> session won't switch mid-flight.
+> A switch also moves the `claude` sessions you already have open, not just
+> the next one you start — see below.
+
+### Switch and carry on
+
+You hit the 5 h limit mid-task and your other account still has room.
+
+**The app offers it.** At 100 % on the 5 h window, if another stored account
+is below 90 % on its own 5 h window and hasn't hit its weekly limit, you get
+a notification and a row at the top of the menu:
+*Limit reached — switch to …*. One click and it's done. No digging through
+submenus at the moment you're blocked.
+
+**Your open terminals come with you.** This is the part that makes it worth
+doing: Claude Code re-reads its credentials while it runs, so a switch moves
+the sessions you already have open, not just the next one you start. Nothing
+is relaunched and no window is opened. Your conversation carries on where it
+was, on the other account's quota.
+
+Before switching, the app counts the running `claude` processes and tells you
+how many are about to change account. That's information, not a barrier: the
+default answer is yes. If the check can't run, it says so rather than
+pretending nothing is open.
+
+> This relies on undocumented Claude Code behaviour, the same way the usage
+> figures do. It was verified by observation, not promised by anyone. If a
+> future version pins credentials at startup, the switch would apply to your
+> next launch only.
+
+One judgement call is yours: rotating accounts to keep working past a limit
+sits in a grey area of Anthropic's usage policy.
 
 Stored accounts live in `~/.config/claude-usage-indicator/accounts/`
 (`chmod 0600` — they contain OAuth tokens, so treat them like
@@ -492,6 +526,7 @@ costs.py                    # daily API cost via ccusage (opt-in)
 sound.py                    # 80% flourish, all three platforms
 attention.py                # Claude Code hook + flag store (terminal attention)
 attention_hooks.py          # registers those hooks in ~/.claude/settings.json
+handoff.py                  # running-session probe + when to offer a switch
 trayicon.py                 # Windows: draws the percentage badge (Pillow)
 winshell.py                 # Windows: dialogs, autostart, launching (ctypes)
 install.sh / update.sh / uninstall.sh                  # Linux

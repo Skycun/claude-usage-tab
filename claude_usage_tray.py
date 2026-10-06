@@ -48,6 +48,7 @@ import accounts
 import attention
 import attention_hooks
 import costs
+import handoff
 import sound
 import trayicon
 import updates
@@ -56,10 +57,12 @@ from alerts import History, evaluate_alerts
 from api import fetch_usage, parse_iso, read_account, read_token
 from formatting import (
     fmt_secs,
+    format_account_usage,
     format_cost,
     format_local,
     format_remaining,
     format_stamp,
+    format_switch_confirm,
     progress_bar,
     to_float,
 )
@@ -229,6 +232,11 @@ class TrayApp:
         self._att_next_scan = 0.0
         self._att_signature: tuple[int, int] = (0, 0)
         self._hooks_installed: bool | None = None
+
+        # Standing offer to hand the work to another account, recomputed on
+        # every poll; the flag keeps the toast to one per limit episode.
+        self._offer: handoff.Offer | None = None
+        self._offer_notified = False
 
         # Menu clicks land on the message-loop thread and must return at once;
         # they push work here instead. A job returning True asks for an
@@ -431,9 +439,14 @@ class TrayApp:
         status = st.get("status")
         if status == "ok" and st.get("data"):
             data = st["data"]
-            five = to_float((data.get("five_hour") or {}).get("utilization"))
-            seven = to_float((data.get("seven_day") or {}).get("utilization"))
-            return t("acct_usage", five=five, seven=seven)
+            five = data.get("five_hour") or {}
+            seven = data.get("seven_day") or {}
+            return format_account_usage(
+                to_float(five.get("utilization")),
+                to_float(seven.get("utilization")),
+                parse_iso(five.get("resets_at")),
+                parse_iso(seven.get("resets_at")),
+            )
         if status == "rate_limited":
             return t("acct_usage_rl")
         if status == "expired":
@@ -481,7 +494,50 @@ class TrayApp:
             if self.tick_counter % HISTORY_SNAPSHOT_EVERY == 0:
                 self.history.snapshot_to_disk()
 
+        self._refresh_offer(claude_state)
         self._apply_visuals(claude_state)
+
+    # -- limit-reached handoff offer ---------------------------------------
+
+    def _refresh_offer(self, claude_state: dict | None) -> None:
+        """Work out whether to offer a switch, and say so once per episode.
+
+        Only meaningful with the switcher enabled: proposing a move the user
+        has not allowed would be an advert for a disabled feature.
+        """
+        if not (self.settings.accounts_enabled and self.settings.account_switch_enabled):
+            self._offer = None
+            self._offer_notified = False
+            return
+
+        data = (claude_state or {}).get("data") or {}
+        active_util = to_float((data.get("five_hour") or {}).get("utilization"))
+        candidates = [
+            handoff.Candidate(
+                account_id=st["acct"].id,
+                email=st["acct"].email or st["acct"].label,
+                session_util=to_float((st["data"].get("five_hour") or {}).get("utilization")),
+                weekly_util=to_float((st["data"].get("seven_day") or {}).get("utilization")),
+            )
+            for st in self.account_states
+            if not st.get("active") and st.get("status") == "ok" and st.get("data")
+        ]
+        self._offer = handoff.pick_offer(active_util, candidates)
+
+        if self._offer is None:
+            # Cleared on the way back down, so the next limit notifies again.
+            self._offer_notified = False
+            return
+        if not self._offer_notified:
+            self._offer_notified = True
+            self.notify(
+                t("ho_offer_title"),
+                t(
+                    "ho_offer_body",
+                    email=self._offer.email,
+                    util=int(self._offer.util),
+                ),
+            )
 
     def _apply_visuals(self, claude_state: dict | None) -> None:
         """Push icon, tooltip and menu to the shell. Worker thread only."""
@@ -764,6 +820,17 @@ class TrayApp:
             yield MenuItem(t("login_item"), self._queued(self._on_login))
         for line in self._metric_lines(data):
             yield MenuItem(line, None, enabled=False)
+
+        if self._offer is not None:
+            # Top of the menu on purpose: this row exists because the user is
+            # blocked right now, and it is the only thing they came here for.
+            yield Menu.SEPARATOR
+            yield MenuItem(
+                t("ho_offer_row", email=self._offer.email),
+                self._queued(
+                    self._on_switch, self._offer.account_id, self._offer.email
+                ),
+            )
 
         if self.settings.attention.enabled and self._attention.total:
             yield Menu.SEPARATOR
@@ -1247,8 +1314,18 @@ class TrayApp:
             self.notify(t("update_spawn_fail_title"), t("win_update_manual"))
 
     def _on_switch(self, acct_id: str, email: str) -> bool:
+        """Confirm once, then swap. Worker thread only.
+
+        The running-session count rides inside the confirmation body
+        (non-negotiable 8): it says what the switch is about to move, and
+        the default answer is yes. Open terminals follow the credentials
+        file, which is the point of the feature, not a hazard, so it does
+        not deserve a warning of its own.
+        """
+        probe = handoff.running_sessions()
         if not winshell.confirm(
-            t("acct_switch_confirm_title"), t("acct_switch_confirm_body", email=email)
+            t("acct_switch_confirm_title"),
+            format_switch_confirm(email, probe.count, probe.known),
         ):
             return False
         if accounts.switch_to(acct_id, datetime.now(timezone.utc)):
