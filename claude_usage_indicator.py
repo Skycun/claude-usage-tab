@@ -49,6 +49,7 @@ from gi.repository import GLib, Gtk, Notify  # noqa: E402
 
 import accounts  # noqa: E402
 import attention  # noqa: E402
+import handoff  # noqa: E402
 from alerts import History, evaluate_alerts  # noqa: E402
 import costs  # noqa: E402
 from api import (  # noqa: E402
@@ -69,10 +70,12 @@ from settings import (  # noqa: E402
 from strings import current_lang, detect_lang, set_lang, setup_locale, t  # noqa: E402
 from topbar import compose_label  # noqa: E402
 from formatting import (  # noqa: E402
+    format_account_usage,
     format_cost,
     format_local,
     format_remaining,
     format_stamp,
+    format_switch_confirm,
     fmt_secs as _fmt_secs,
     progress_bar,
     to_float,
@@ -230,6 +233,11 @@ class Indicator:
         self._blink_on = False
         self._att_next_scan = 0.0
 
+        # Standing offer to hand the work to another account when the active
+        # one runs dry; the flag keeps the notification to one per episode.
+        self._offer: handoff.Offer | None = None
+        self._offer_notified = False
+
         self.ind = AppIndicator.Indicator.new(
             APP_ID,
             pick_icon(0, 0),
@@ -297,6 +305,12 @@ class Indicator:
         self.item_clear_alerts = Gtk.MenuItem(label=t("clear_alerts"))
         self.item_clear_alerts.connect("activate", self._on_clear_alerts)
 
+        # Limit-reached handoff — hidden until the active account runs dry
+        # and another one has room.
+        self.item_offer = Gtk.MenuItem(label="")
+        self.item_offer.connect("activate", self._on_offer_clicked)
+        self.sep_offer = Gtk.SeparatorMenuItem()
+
         # Terminal-attention block — hidden until a session is flagged.
         self.item_attention = self._info_item("")
         self.item_attention_clear = Gtk.MenuItem(label=t("att_clear"))
@@ -326,6 +340,8 @@ class Indicator:
             self.item_extra,
             self.item_accounts,
             self.item_costs,
+            self.sep_offer,
+            self.item_offer,
             self.sep_attention,
             self.item_attention,
             self.item_attention_clear,
@@ -357,12 +373,16 @@ class Indicator:
             self.item_attention,
             self.item_attention_clear,
         )
+        self._offer_only = (self.sep_offer, self.item_offer)
         self.menu.show_all()
         # Alert block is hidden until an alert fires.
         for item in self._alert_only:
             item.hide()
         # Attention block is hidden until a Claude terminal flags itself.
         for item in self._attention_only:
+            item.hide()
+        # Offer row is hidden until the active account is actually blocked.
+        for item in self._offer_only:
             item.hide()
         # Extra row hidden by default — only shown when extra credits enabled.
         self.item_extra.hide()
@@ -984,6 +1004,69 @@ class Indicator:
         # --- Multi-account submenu ---
         self._render_accounts(account_states or [])
 
+        # --- Limit-reached handoff offer ---
+        self._refresh_offer(claude_state, account_states or [])
+
+    # -- limit-reached handoff offer -------------------------------------
+
+    def _refresh_offer(
+        self, claude_state: dict | None, account_states: list[dict]
+    ) -> None:
+        """Work out whether to offer a switch, and say so once per episode.
+
+        Only meaningful with the switcher enabled: proposing a move the user
+        has not allowed would advertise a disabled feature.
+        """
+        enabled = (
+            self.settings.accounts_enabled and self.settings.account_switch_enabled
+        )
+        if enabled:
+            data = (claude_state or {}).get("data") or {}
+            active_util = to_float((data.get("five_hour") or {}).get("utilization"))
+            candidates = [
+                handoff.Candidate(
+                    account_id=st["acct"].id,
+                    email=st["acct"].email or st["acct"].label,
+                    session_util=to_float(
+                        (st["data"].get("five_hour") or {}).get("utilization")
+                    ),
+                    weekly_util=to_float(
+                        (st["data"].get("seven_day") or {}).get("utilization")
+                    ),
+                )
+                for st in account_states
+                if not st.get("active") and st.get("status") == "ok" and st.get("data")
+            ]
+            self._offer = handoff.pick_offer(active_util, candidates)
+        else:
+            self._offer = None
+
+        if self._offer is None:
+            # Cleared on the way back down, so the next limit notifies again.
+            self._offer_notified = False
+            for item in self._offer_only:
+                item.hide()
+            return
+
+        self.item_offer.set_label(t("ho_offer_row", email=self._offer.email))
+        for item in self._offer_only:
+            item.show()
+        if not self._offer_notified:
+            self._offer_notified = True
+            self.notify(
+                t("ho_offer_title"),
+                t(
+                    "ho_offer_body",
+                    email=self._offer.email,
+                    util=int(self._offer.util),
+                ),
+            )
+
+    def _on_offer_clicked(self, _item: Gtk.MenuItem) -> None:
+        offer = self._offer
+        if offer is not None:
+            self._on_switch_account(offer.account_id, offer.email)
+
     # -- accounts --------------------------------------------------------
 
     def _tick_accounts(
@@ -1065,9 +1148,14 @@ class Indicator:
         status = st.get("status")
         if status == "ok" and st.get("data"):
             data = st["data"]
-            five = to_float((data.get("five_hour") or {}).get("utilization"))
-            seven = to_float((data.get("seven_day") or {}).get("utilization"))
-            return t("acct_usage", five=five, seven=seven)
+            five = data.get("five_hour") or {}
+            seven = data.get("seven_day") or {}
+            return format_account_usage(
+                to_float(five.get("utilization")),
+                to_float(seven.get("utilization")),
+                parse_iso(five.get("resets_at")),
+                parse_iso(seven.get("resets_at")),
+            )
         if status == "rate_limited":
             return t("acct_usage_rl")
         if status == "expired":
@@ -1100,6 +1188,7 @@ class Indicator:
             )
         sub.append(switch_item)
 
+
         forget_item = Gtk.MenuItem(label=t("acct_forget"))
         if active:
             forget_item.set_sensitive(False)
@@ -1114,9 +1203,18 @@ class Indicator:
         return item
 
     def _on_switch_account(self, acct_id: str, email: str) -> None:
+        """Confirm once, then swap.
+
+        The running-session count rides inside the confirmation body
+        (non-negotiable 8): it says what the switch is about to move, and
+        the default answer is yes. Open terminals follow the credentials
+        file, which is the point of the feature, not a hazard, so it does
+        not deserve a warning of its own.
+        """
+        probe = handoff.running_sessions()
         if not self._confirm(
             t("acct_switch_confirm_title"),
-            t("acct_switch_confirm_body", email=email),
+            format_switch_confirm(email, probe.count, probe.known),
         ):
             return
         if accounts.switch_to(acct_id, datetime.now(timezone.utc)):

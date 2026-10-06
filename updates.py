@@ -63,16 +63,16 @@ def is_newer(latest: str | None, current: str) -> bool:
 
 def _load_cache() -> dict:
     try:
-        data = json.loads(CACHE_PATH.read_text())
+        data = json.loads(CACHE_PATH.read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         return {}
 
 
 def _save_cache(data: dict) -> None:
     try:
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        CACHE_PATH.write_text(json.dumps(data, indent=2) + "\n")
+        CACHE_PATH.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     except OSError:
         pass
 

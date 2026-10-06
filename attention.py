@@ -32,6 +32,25 @@ Design notes worth keeping:
   inside Claude Code, and a failed read must never break the poll loop, so
   both directions degrade to "no flags" instead of propagating.
 
+A second, smaller store rides on the same hooks: :data:`TURNS_DIR` holds one
+file per session **while a turn is running**, which is what lets ``standby``
+wait for every terminal to finish before it puts the machine to sleep. It is
+kept apart from the flags on purpose — a flag says "come back", a turn says
+"still working", and a permission prompt is both at once. Its rules:
+
+* **Opened by ``UserPromptSubmit`` and by ``PostToolUse``, closed by ``Stop``
+  and ``SessionEnd``.** ``PostToolUse`` re-opens rather than merely touching:
+  a background subagent keeps working after its parent's ``Stop``, and its
+  tool calls carry the parent's session id — that is the only sign of it.
+* **A turn nobody closed goes stale.** ``Stop`` does not fire on an Esc
+  interrupt, and an async ``PostToolUse`` can land just after the ``Stop``
+  that should have been last. Either leaves a file behind, so a turn with no
+  activity for :data:`TURN_STALE_MINUTES` is treated as over. Those two
+  leftovers only make the machine sleep *later*. The cut-off itself is the
+  one deliberate way to sleep *early*: a live turn silent for that long — a
+  single very long tool call, an unanswered permission prompt — reads as
+  finished.
+
 Stdlib only, and no imports from this project: the hook runs as its own tiny
 process on every turn, and the front-ends import it without dragging in GTK,
 rumps or Pillow.
@@ -49,6 +68,7 @@ from pathlib import Path
 
 APP_ID = "claude-usage-indicator"
 STATE_DIR = Path.home() / ".cache" / APP_ID / "attention"
+TURNS_DIR = Path.home() / ".cache" / APP_ID / "turns"
 
 # The two states a flagged session can be in. ``waiting`` outranks ``done``
 # everywhere: a permission prompt blocks the session, a finished turn doesn't.
@@ -68,6 +88,24 @@ EVENT_ACTIONS: dict[str, str] = {
     "UserPromptSubmit": CLEAR,
     "SessionEnd": CLEAR,
 }
+
+# Claude Code hook event -> what it does to that session's running turn.
+TURN_OPEN = "open"
+TURN_CLOSE = "close"
+TURN_ACTIONS: dict[str, str] = {
+    "UserPromptSubmit": TURN_OPEN,
+    "PostToolUse": TURN_OPEN,
+    "Stop": TURN_CLOSE,
+    "SessionEnd": TURN_CLOSE,
+}
+
+# How long a turn can go without a single hook before it is presumed dead.
+# Generous on purpose: a foreground command may run ten minutes with no
+# ``PostToolUse``, and reading a live turn as finished is the one mistake that
+# would put the machine to sleep under someone's work. A turn parked on a
+# permission prompt goes stale too — nobody is there to answer it, and that
+# is no reason to keep the machine awake all night.
+TURN_STALE_MINUTES = 30
 
 # How old a flag has to be before ``PostToolUse`` may remove it. Hook
 # processes run ``async``, so two of them race: a tool that finished just
@@ -150,24 +188,28 @@ def _path(session_id: str) -> Path:
     return STATE_DIR / (safe_id(session_id) + ".json")
 
 
-def record(session_id: str, kind: str, cwd: str = "") -> bool:
-    """Flag ``session_id``. Returns False if the write failed (never raises)."""
-    if kind not in VALID_KINDS:
-        return False
-    path = _path(session_id)
-    payload = {
-        "kind": kind,
-        "ts": time.time(),
-        "project": project_name(cwd),
-    }
+def _write(path: Path, payload: dict) -> bool:
+    """Atomically replace ``path`` with ``payload``. Never raises."""
     try:
-        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps(payload), encoding="utf-8")
         os.replace(tmp, path)
         return True
     except OSError:
         return False
+
+
+def record(session_id: str, kind: str, cwd: str = "") -> bool:
+    """Flag ``session_id``. Returns False if the write failed (never raises)."""
+    if kind not in VALID_KINDS:
+        return False
+    payload = {
+        "kind": kind,
+        "ts": time.time(),
+        "project": project_name(cwd),
+    }
+    return _write(_path(session_id), payload)
 
 
 def clear(session_id: str, min_age: float = 0.0) -> None:
@@ -198,9 +240,9 @@ def clear_all() -> int:
     return removed
 
 
-def _files() -> list[Path]:
+def _files(directory: Path = STATE_DIR) -> list[Path]:
     try:
-        return [p for p in STATE_DIR.iterdir() if p.suffix == ".json"]
+        return [p for p in directory.iterdir() if p.suffix == ".json"]
     except OSError:
         return []
 
@@ -251,6 +293,95 @@ def scan(expire_minutes: int = DEFAULT_EXPIRE_MINUTES) -> Snapshot:
     return Snapshot(waiting=tuple(waiting), done=tuple(done))
 
 
+# ----------------------------------------------------------------- turn store
+
+
+@dataclass(frozen=True)
+class Turn:
+    """One session whose turn is still running, as read back from disk."""
+
+    session_id: str
+    ts: float
+    project: str = ""
+
+
+def _turn_path(session_id: str) -> Path:
+    return TURNS_DIR / (safe_id(session_id) + ".json")
+
+
+def open_turn(session_id: str, cwd: str = "") -> bool:
+    """Mark a turn as running, or still running. Never raises."""
+    payload = {"ts": time.time(), "project": project_name(cwd)}
+    return _write(_turn_path(session_id), payload)
+
+
+def close_turn(session_id: str) -> None:
+    """The turn is over. A missing file is fine: it may have gone stale."""
+    try:
+        _turn_path(session_id).unlink()
+    except OSError:
+        pass
+
+
+def _read_turn(path: Path) -> Turn | None:
+    """The turn in ``path``, or ``None`` if the file is garbage.
+
+    ``OSError`` is left to the caller: a file caught mid-replace by a hook is
+    a live turn that cannot be read *this* second, not one to delete.
+    """
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except ValueError:
+        return None
+    if not isinstance(raw, dict):
+        return None
+    try:
+        ts = float(raw.get("ts") or 0.0)
+    except (TypeError, ValueError):
+        return None
+    return Turn(
+        session_id=path.stem,
+        ts=ts,
+        project=str(raw.get("project") or "")[:MAX_PROJECT_LEN],
+    )
+
+
+def turns(stale_minutes: int = TURN_STALE_MINUTES) -> tuple[Turn, ...]:
+    """Every turn still running, oldest first; stale ones are swept.
+
+    Unlike the flag scan, this one is not fail-open all the way down: a
+    missing directory means nothing ever ran, but a directory that exists and
+    cannot be listed raises ``OSError``. Reading that as "no turn running"
+    is the one answer that could put the machine to sleep under live work.
+    """
+    cutoff = time.time() - max(1, stale_minutes) * 60
+    try:
+        paths = [p for p in TURNS_DIR.iterdir() if p.suffix == ".json"]
+    except FileNotFoundError:
+        return ()
+    found: list[Turn] = []
+    for path in paths:
+        try:
+            turn = _read_turn(path)
+        except OSError:
+            # Count it, dated by its mtime: skipping it for one beat would
+            # read as "everything finished" to a caller waiting on exactly
+            # that, and a file that stays unreadable still goes stale.
+            try:
+                turn = Turn(session_id=path.stem, ts=path.stat().st_mtime)
+            except OSError:
+                continue
+        if turn is None or turn.ts < cutoff:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+            continue
+        found.append(turn)
+    found.sort(key=lambda turn: turn.ts)
+    return tuple(found)
+
+
 # ------------------------------------------------------------------ hook entry
 
 
@@ -268,11 +399,17 @@ def _payload() -> dict:
 
 
 def handle_event(event: str, payload: dict) -> None:
-    """Apply one hook event to the flag store."""
+    """Apply one hook event to the turn store, then to the flag store."""
+    session_id = safe_id(payload.get("session_id"))
+    turn = TURN_ACTIONS.get(event)
+    if turn == TURN_OPEN:
+        open_turn(session_id, str(payload.get("cwd") or ""))
+    elif turn == TURN_CLOSE:
+        close_turn(session_id)
+
     action = EVENT_ACTIONS.get(event)
     if action is None:
         return
-    session_id = safe_id(payload.get("session_id"))
     if action == CLEAR:
         clear(session_id)
         return
@@ -300,6 +437,7 @@ def main(argv: list[str]) -> int:
                         "waiting": len(snap.waiting),
                         "done": len(snap.done),
                         "sessions": [s.project or s.session_id for s in snap.sessions],
+                        "running": [t.project or t.session_id for t in turns()],
                     }
                 )
             )

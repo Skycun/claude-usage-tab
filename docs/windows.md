@@ -114,6 +114,7 @@ Nothing under `~\.claude` (Claude Code's own credentials) is ever touched.
 | File picker | GTK | `osascript` | `GetOpenFileNameW` (ctypes) |
 | Autostart | `.desktop` in `~/.config/autostart` | LaunchAgent | `HKCU\...\Run` |
 | Sounds | ffplay/mpv/paplay… | `afplay` | `winsound` (WAV) / hidden PowerShell `MediaPlayer` (mp3) |
+| Sleep when done | not wired yet | not wired yet | `SetSuspendState` (ctypes), never hibernates |
 | Python | system Python (no venv) | venv | venv |
 
 Everything else — polling, backoff on 429, multi-account switching, custom
@@ -143,6 +144,11 @@ editor) — there is no GTK window here.
    set `cost.command` in `settings.json`.
 5. **Explorer restarts.** `pystray` re-adds the icon on `WM_TASKBARCREATED`,
    so it should survive one. Worth confirming.
+6. **Sleep when done.** `SetSuspendState(False, False, False)` asks for
+   plain sleep after enabling `SeShutdownPrivilege`. On a machine with S3 it
+   sleeps; on a modern-standby (S0) laptop Windows may refuse, in which case
+   a "Could not sleep" notification says so. `powercfg /a` tells you which
+   kind you have.
 
 ## Packaging as an .exe (optional, later)
 

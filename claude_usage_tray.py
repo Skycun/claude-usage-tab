@@ -48,7 +48,9 @@ import accounts
 import attention
 import attention_hooks
 import costs
+import handoff
 import sound
+import standby
 import trayicon
 import updates
 import winshell
@@ -56,10 +58,14 @@ from alerts import History, evaluate_alerts
 from api import fetch_usage, parse_iso, read_account, read_token
 from formatting import (
     fmt_secs,
+    format_account_usage,
+    format_clock,
     format_cost,
+    format_delay,
     format_local,
     format_remaining,
     format_stamp,
+    format_switch_confirm,
     progress_bar,
     to_float,
 )
@@ -102,6 +108,12 @@ MIN_POLL_SECONDS = 10
 ATTENTION_RESCAN_SECONDS = 1.0
 ATTENTION_IDLE_SECONDS = 1.0
 ATTENTION_OFF_SECONDS = 5.0
+
+# Sleep-when-done beat. Only runs while a plan is armed, and on its own
+# deadline rather than the blink's: the blink can be switched off, sleeping
+# when the terminals are done still has to notice them finish.
+STANDBY_BEAT_SECONDS = 1.0
+STANDBY_HOOKS_RECHECK_SECONDS = 60.0
 
 APP_TITLE = "Claude Usage Tab"
 
@@ -230,6 +242,20 @@ class TrayApp:
         self._att_signature: tuple[int, int] = (0, 0)
         self._hooks_installed: bool | None = None
 
+        # Standing offer to hand the work to another account, recomputed on
+        # every poll; the flag keeps the toast to one per limit episode.
+        self._offer: handoff.Offer | None = None
+        self._offer_notified = False
+
+        # Sleep-when-done: the armed plan (``None`` when off), the running
+        # turns as of the last beat, and what the menu last showed of both —
+        # so the native menu is rebuilt when that moves, not every second.
+        self._standby: standby.Plan | None = None
+        self._turns: tuple[attention.Turn, ...] = ()
+        self._standby_signature: tuple = ()
+        self._standby_hooks_due = 0.0
+        self._turns_error = ""
+
         # Menu clicks land on the message-loop thread and must return at once;
         # they push work here instead. A job returning True asks for an
         # immediate poll rather than waiting out the rest of the interval.
@@ -255,6 +281,7 @@ class TrayApp:
         next_poll = 0.0
         next_update = time.monotonic() + UPDATE_CHECK_DELAY
         next_blink = 0.0
+        next_standby = 0.0
         first_update = True
 
         while self._running:
@@ -273,8 +300,19 @@ class TrayApp:
             if time.monotonic() >= next_blink:
                 self._safe(self._blink_step, "blink")
                 next_blink = time.monotonic() + self._blink_interval()
+            if self._standby is not None and time.monotonic() >= next_standby:
+                # Clicks first: a Cancel queued while the worker was stuck in
+                # a slow poll must land before the deadline check, not after
+                # the suspend it was meant to stop.
+                if self._drain_jobs():
+                    next_poll = 0.0
+                if self._standby is not None:
+                    self._safe(self._standby_step, "standby")
+                next_standby = time.monotonic() + STANDBY_BEAT_SECONDS
 
             deadlines = [next_poll, next_update, next_blink]
+            if self._standby is not None:
+                deadlines.append(next_standby)
             timeout = max(0.05, min(deadlines) - time.monotonic())
             try:
                 job = self._jobs.get(timeout=timeout)
@@ -282,6 +320,17 @@ class TrayApp:
                 continue
             if self._safe(job, "menu action") is True:
                 next_poll = 0.0
+
+    def _drain_jobs(self) -> bool:
+        """Run every queued job now. True if one of them asked for a poll."""
+        wants_poll = False
+        while True:
+            try:
+                job = self._jobs.get_nowait()
+            except queue.Empty:
+                return wants_poll
+            if self._safe(job, "menu action") is True:
+                wants_poll = True
 
     @staticmethod
     def _safe(fn, what: str):
@@ -431,9 +480,14 @@ class TrayApp:
         status = st.get("status")
         if status == "ok" and st.get("data"):
             data = st["data"]
-            five = to_float((data.get("five_hour") or {}).get("utilization"))
-            seven = to_float((data.get("seven_day") or {}).get("utilization"))
-            return t("acct_usage", five=five, seven=seven)
+            five = data.get("five_hour") or {}
+            seven = data.get("seven_day") or {}
+            return format_account_usage(
+                to_float(five.get("utilization")),
+                to_float(seven.get("utilization")),
+                parse_iso(five.get("resets_at")),
+                parse_iso(seven.get("resets_at")),
+            )
         if status == "rate_limited":
             return t("acct_usage_rl")
         if status == "expired":
@@ -481,7 +535,50 @@ class TrayApp:
             if self.tick_counter % HISTORY_SNAPSHOT_EVERY == 0:
                 self.history.snapshot_to_disk()
 
+        self._refresh_offer(claude_state)
         self._apply_visuals(claude_state)
+
+    # -- limit-reached handoff offer ---------------------------------------
+
+    def _refresh_offer(self, claude_state: dict | None) -> None:
+        """Work out whether to offer a switch, and say so once per episode.
+
+        Only meaningful with the switcher enabled: proposing a move the user
+        has not allowed would be an advert for a disabled feature.
+        """
+        if not (self.settings.accounts_enabled and self.settings.account_switch_enabled):
+            self._offer = None
+            self._offer_notified = False
+            return
+
+        data = (claude_state or {}).get("data") or {}
+        active_util = to_float((data.get("five_hour") or {}).get("utilization"))
+        candidates = [
+            handoff.Candidate(
+                account_id=st["acct"].id,
+                email=st["acct"].email or st["acct"].label,
+                session_util=to_float((st["data"].get("five_hour") or {}).get("utilization")),
+                weekly_util=to_float((st["data"].get("seven_day") or {}).get("utilization")),
+            )
+            for st in self.account_states
+            if not st.get("active") and st.get("status") == "ok" and st.get("data")
+        ]
+        self._offer = handoff.pick_offer(active_util, candidates)
+
+        if self._offer is None:
+            # Cleared on the way back down, so the next limit notifies again.
+            self._offer_notified = False
+            return
+        if not self._offer_notified:
+            self._offer_notified = True
+            self.notify(
+                t("ho_offer_title"),
+                t(
+                    "ho_offer_body",
+                    email=self._offer.email,
+                    util=int(self._offer.util),
+                ),
+            )
 
     def _apply_visuals(self, claude_state: dict | None) -> None:
         """Push icon, tooltip and menu to the shell. Worker thread only."""
@@ -553,6 +650,141 @@ class TrayApp:
         if self._badge_text:
             return trayicon.attention_badge(self._badge_text, kind)
         return trayicon.attention_dot(kind)
+
+    # -- sleep when done ----------------------------------------------------
+
+    def _standby_step(self) -> None:
+        """One beat of an armed plan. Worker thread only."""
+        plan = self._standby
+        if plan is None:
+            return
+        if plan.mode == standby.MODE_FINISHED and not self._standby_hooks_ok():
+            # Nothing refreshes a running turn any more: it would go stale,
+            # read as finished, and sleep the machine under live work.
+            self._on_standby_cancel()
+            self.notify(t("sb_menu"), t("sb_needs_hooks"))
+            return
+        try:
+            self._turns = attention.turns()
+        except OSError as e:
+            # Not "nothing is running" — hold the plan exactly where it is.
+            # Logged once per distinct error, not once a second.
+            if str(e) != self._turns_error:
+                self._turns_error = str(e)
+                print(f"standby: turns unreadable: {e}", file=sys.stderr)
+            return
+        self._turns_error = ""
+        nxt, event = standby.advance(
+            plan, time.time(), standby.awake_clock(), bool(self._turns)
+        )
+        self._standby = nxt
+        if event == standby.EVENT_SLEEP:
+            # Disarmed *before* the call: it may not return until the machine
+            # wakes, and must not find a plan when it does. A failed redraw
+            # must not stand between a spent plan and the sleep it promised.
+            self._turns = ()
+            self._safe(self._refresh_standby_view, "standby view")
+            if not standby.suspend():
+                self.notify(t("sb_failed_title"), t("sb_failed_body"))
+            return
+        if event == standby.EVENT_COUNTDOWN:
+            body = (
+                "sb_countdown_finish"
+                if plan.mode == standby.MODE_FINISHED
+                else "sb_countdown_delay"
+            )
+            self.notify(t("sb_countdown_title", s=standby.GRACE_SECONDS), t(body))
+        elif event == standby.EVENT_RESUMED:
+            self.notify(t("sb_resumed_title"), t("sb_resumed_body"))
+        elif event == standby.EVENT_SLEPT:
+            self._turns = ()
+            self.notify(t("sb_missed_title"), t("sb_missed_body"))
+        self._refresh_standby_view()
+
+    def _standby_hooks_ok(self) -> bool:
+        """Hook registration, re-read once a minute while a plan waits on it.
+
+        The hooks can be removed behind our back — by hand, or by another
+        tool rewriting ``~/.claude/settings.json`` — and the menu button that
+        removes them is not the only way.
+        """
+        now = time.monotonic()
+        if now >= self._standby_hooks_due:
+            self._refresh_hook_state()
+            self._standby_hooks_due = now + STANDBY_HOOKS_RECHECK_SECONDS
+        return bool(self._hooks_installed)
+
+    def _standby_label(self) -> str:
+        """What is armed, in one line — or "" when nothing is."""
+        plan = self._standby
+        if plan is None:
+            return ""
+        if plan.sleep_at is not None:
+            return t("sb_armed_delay", time=format_clock(plan.sleep_at, seconds=True))
+        if plan.mode == standby.MODE_DELAY and plan.due is not None:
+            return t("sb_armed_delay", time=format_clock(plan.due))
+        return t("sb_armed_finish")
+
+    def _refresh_standby_view(self) -> None:
+        """Rebuild tooltip and menu, only when what they show has moved.
+
+        Idle ages are in the signature at minute resolution, which is what
+        the rows print — so a waiting plan costs one rebuild a minute at
+        most, not one a second.
+        """
+        plan = self._standby
+        now = time.time()
+        signature = (
+            self._standby_label(),
+            plan.seen_busy if plan else False,
+            tuple((turn.session_id, int(now - turn.ts) // 60) for turn in self._turns),
+        )
+        if signature == self._standby_signature:
+            return
+        self._standby_signature = signature
+        self.icon.title = winshell.clamp(
+            self._compose_tooltip(self._last_claude_state), winshell.MAX_TIP
+        )
+        self.icon.update_menu()
+
+    def _arm_standby(self, plan: standby.Plan) -> None:
+        self._standby = plan
+        self._turns = ()  # the first beat, due at once, reads them
+        self._standby_hooks_due = time.monotonic() + STANDBY_HOOKS_RECHECK_SECONDS
+        self.notify(t("sb_armed_title"), self._standby_label())
+        self._refresh_standby_view()
+
+    def _on_standby_finish(self) -> None:
+        # Re-read rather than trust the cache: the hooks may have been
+        # installed or removed by hand since the menu was last built.
+        self._refresh_hook_state()
+        if not self._hooks_installed:
+            self.notify(t("sb_menu"), t("sb_needs_hooks"))
+            self.icon.update_menu()
+            return
+        self._arm_standby(standby.after_finish(time.time(), standby.awake_clock()))
+
+    def _on_standby_delay(self, minutes: int) -> None:
+        self._arm_standby(
+            standby.after_delay(minutes, time.time(), standby.awake_clock())
+        )
+
+    def _on_standby_cancel(self) -> None:
+        self._standby = None
+        self._turns = ()
+        self._refresh_standby_view()
+
+    def _on_standby_forget(self, session_id: str) -> None:
+        """Drop one turn the user says is over — typically an Esc interrupt.
+
+        One at a time, never all: the user is the only one who can tell a
+        dead turn from a live one deep in a long tool call, and only for the
+        terminal they are looking at. If that one was alive after all, its
+        next hook opens it again.
+        """
+        attention.close_turn(session_id)
+        self._turns = tuple(turn for turn in self._turns if turn.session_id != session_id)
+        self._refresh_standby_view()
 
     # -- icon -------------------------------------------------------------
 
@@ -634,6 +866,11 @@ class TrayApp:
             wait = claude_state.get("wait_secs")
             if wait:
                 candidates.insert(0, t("rate_limited", d=fmt_secs(int(wait))))
+        # First in line: a machine about to put itself to sleep is the one
+        # thing a hover should never fail to mention.
+        standby_line = self._standby_label()
+        if standby_line:
+            candidates.insert(0, standby_line)
 
         tip = winshell.clamp(header, winshell.MAX_TIP)
         for line in candidates:
@@ -765,11 +1002,39 @@ class TrayApp:
         for line in self._metric_lines(data):
             yield MenuItem(line, None, enabled=False)
 
+        if self._offer is not None:
+            # Top of the menu on purpose: this row exists because the user is
+            # blocked right now, and it is the only thing they came here for.
+            yield Menu.SEPARATOR
+            yield MenuItem(
+                t("ho_offer_row", email=self._offer.email),
+                self._queued(
+                    self._on_switch, self._offer.account_id, self._offer.email
+                ),
+            )
+
+        plan = self._standby
+        if plan is not None and plan.sleep_at is not None:
+            # A minute from sleeping: the way out goes at the top, one click,
+            # no submenu to find first.
+            yield Menu.SEPARATOR
+            yield MenuItem(
+                t("sb_countdown_row", time=format_clock(plan.sleep_at, seconds=True)),
+                self._queued(self._on_standby_cancel),
+            )
+
         if self.settings.attention.enabled and self._attention.total:
             yield Menu.SEPARATOR
             yield MenuItem(
                 t("att_menu_title", n=self._attention.total),
                 Menu(*self._attention_items()),
+            )
+
+        if standby.supported():
+            yield Menu.SEPARATOR
+            yield MenuItem(
+                self._standby_label() or t("sb_menu"),
+                Menu(*self._standby_items()),
             )
 
         if self.settings.accounts_enabled and self.account_states:
@@ -824,6 +1089,55 @@ class TrayApp:
             yield MenuItem(label, None, enabled=False)
         yield Menu.SEPARATOR
         yield MenuItem(t("att_clear"), self._queued(self._on_clear_attention))
+
+    def _standby_items(self):
+        """The two ways to arm it, or — once armed — what it waits on."""
+        plan = self._standby
+        if plan is None:
+            if self._hooks_installed is None:
+                self._refresh_hook_state()  # a small file read, as above
+            hooks = bool(self._hooks_installed)
+            yield MenuItem(
+                t("sb_finish"), self._queued(self._on_standby_finish), enabled=hooks
+            )
+            if not hooks:
+                yield MenuItem(t("sb_needs_hooks"), None, enabled=False)
+            yield Menu.SEPARATOR
+            for minutes in standby.DELAY_PRESETS:
+                yield MenuItem(
+                    format_delay(minutes), self._queued(self._on_standby_delay, minutes)
+                )
+            return
+
+        if plan.mode == standby.MODE_FINISHED:
+            turns = self._turns
+            now = time.time()
+            for turn in turns:
+                project = turn.project or turn.session_id[:12]
+                idle = int(now - turn.ts)
+                label = (
+                    t("sb_running_idle", project=project, d=fmt_secs(idle))
+                    if idle >= 60
+                    else t("sb_running", project=project)
+                )
+                # The silence is printed so the user can tell an Esc-interrupted
+                # terminal (which never fires the Stop that would close it)
+                # from one deep in a long command, and forget only the former.
+                yield MenuItem(
+                    label,
+                    Menu(
+                        MenuItem(
+                            t("sb_forget_one"),
+                            self._queued(self._on_standby_forget, turn.session_id),
+                        )
+                    ),
+                )
+            if turns:
+                yield Menu.SEPARATOR
+            elif not plan.seen_busy:
+                yield MenuItem(t("sb_none_running"), None, enabled=False)
+                yield Menu.SEPARATOR
+        yield MenuItem(t("sb_cancel"), self._queued(self._on_standby_cancel))
 
     def _attention_line(self) -> str:
         """Tooltip fragment for what is flagged, or "" when nothing is."""
@@ -1187,6 +1501,12 @@ class TrayApp:
         result = attention_hooks.uninstall()
         self._refresh_hook_state()
         self._on_clear_attention()
+        plan = self._standby
+        if plan is not None and plan.mode == standby.MODE_FINISHED and not self._hooks_installed:
+            # Nothing would refresh a running turn any more: it would go
+            # stale and read as finished, putting the machine to sleep under
+            # work still in progress.
+            self._on_standby_cancel()
         if not result.ok:
             self.notify(
                 t("dlg_att_section"), t("dlg_att_hooks_failed", err=result.detail)
@@ -1247,8 +1567,18 @@ class TrayApp:
             self.notify(t("update_spawn_fail_title"), t("win_update_manual"))
 
     def _on_switch(self, acct_id: str, email: str) -> bool:
+        """Confirm once, then swap. Worker thread only.
+
+        The running-session count rides inside the confirmation body
+        (non-negotiable 8): it says what the switch is about to move, and
+        the default answer is yes. Open terminals follow the credentials
+        file, which is the point of the feature, not a hazard, so it does
+        not deserve a warning of its own.
+        """
+        probe = handoff.running_sessions()
         if not winshell.confirm(
-            t("acct_switch_confirm_title"), t("acct_switch_confirm_body", email=email)
+            t("acct_switch_confirm_title"),
+            format_switch_confirm(email, probe.count, probe.known),
         ):
             return False
         if accounts.switch_to(acct_id, datetime.now(timezone.utc)):
