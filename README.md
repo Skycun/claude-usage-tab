@@ -64,6 +64,10 @@ cd ~/claude-usage-tab
 ./install.sh
 ```
 
+> **On Windows?** Don't paste that — PowerShell doesn't expand `~`, so you'd
+> get a folder literally called `~`. Use the
+> [Windows](#windows-experimental) commands instead.
+
 That's it — the indicator appears in your top bar and starts polling. The
 installer detects Ubuntu (`apt`) or Fedora (`dnf`), installs the handful
 of system packages it needs, copies the icons, adds an app-grid entry,
@@ -125,12 +129,34 @@ the Linux build, and the known caveats (Keychain, notifications).
 
 There's a **system-tray** build for Windows — the notification area at the
 bottom-right of the taskbar — driven by
-[`pystray`](https://github.com/moses-palmer/pystray) + Pillow:
+[`pystray`](https://github.com/moses-palmer/pystray) + Pillow.
+
+You need **Python 3.9+** (from [python.org](https://www.python.org/downloads/),
+ticking *Add python.exe to PATH*) and **Claude Code** signed in at least
+once. Then, in **PowerShell** — not Command Prompt, not Git Bash:
 
 ```powershell
-git clone https://github.com/Skycun/claude-usage-tab.git $HOME\claude-usage-tab
-cd $HOME\claude-usage-tab
+cd $HOME
+git clone https://github.com/Skycun/claude-usage-tab.git
+cd claude-usage-tab
 .\install-windows.ps1
+```
+
+> [!NOTE]
+> There is deliberately no `~` in there. PowerShell passes `~` to `git`
+> unexpanded, so the bash form from the Quick start
+> (`git clone ... ~/claude-usage-tab`) clones into a folder *literally named*
+> `~`, and the `cd` after it then fails. The commands above cannot do that.
+> If you already have such a folder, it holds your clone at
+> `.\~\claude-usage-tab` — move that out, then
+> `Remove-Item -LiteralPath '.\~' -Recurse` (keep the `.\`; a bare `'~'`
+> resolves to your entire user profile).
+
+If PowerShell refuses to run the script at all, that's the execution policy
+rather than the script:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install-windows.ps1
 ```
 
 The tray gives you an icon and a tooltip, and nothing else — so the number
@@ -172,6 +198,9 @@ logs, and the known caveats.
   soon as one of your Claude Code sessions finishes its turn or stops on a
   permission prompt, and stops the moment you answer it. →
   [Terminal attention](#terminal-attention)
+- 🔁 **Switch and carry on** — hit the 5 h limit? One click moves every open
+  terminal to another account, and the app offers it to you the moment you're
+  blocked. → [Multiple accounts](#multiple-accounts)
 - 👥 **Multi-account switcher** — remembers every Claude account you sign
   in as, shows each one's usage, and (opt-in) switches which account
   Claude Code uses next. → [Multiple accounts](#multiple-accounts)
@@ -365,7 +394,8 @@ Waiting always wins: it is the state that is actually blocking work.
 
 **Turning it on**
 
-1. Open **Options ▸ Claude terminals** (the settings window on Linux).
+1. Open **Options ▸ Claude terminals** — on Linux, **Settings… ▸ General ▸
+   Claude terminals**.
 2. Click **Install the Claude Code hooks**, and confirm.
 3. Tick **Blink when a terminal wants me**.
 
@@ -391,6 +421,51 @@ want to silence them all.
   project folder's name, never its path. A flag nothing cleared (a terminal
   killed outright) expires after an hour.
 - No hooks installed means no flags, which means no blink — never an error.
+- Claude Code reads its hooks when a session starts. Terminals already open
+  when you install them aren't seen — by the blink or by
+  [Sleep when done](#sleep-when-done-windows-linux-gnome) — until you restart
+  them.
+
+---
+
+## Sleep when done *(Windows, Linux GNOME)*
+
+Start a long job, walk away, and let the PC go to sleep on its own once it
+is finished instead of idling all night. The **Sleep** submenu offers two
+one-shot triggers:
+
+- **When the Claude terminals are done** — waits until *every* terminal that
+  is working has finished its turn, so a short job never cuts a long one
+  off. Arming it before launching the job works too: it waits for a turn to
+  start first. Needs the Claude Code hooks from
+  [Terminal attention](#terminal-attention) (the blink itself can stay off).
+- **In 30 min / 1 h / 2 h / 4 h** — whatever the terminals are doing.
+
+Nothing happens abruptly. When the moment comes you get a notification and a
+60-second countdown, with a **Sleeping at … — cancel** row at the top of the
+menu. If a terminal starts working again during the countdown, sleep is put
+off until it is done. Once the PC has slept, the plan is spent — waking it
+up won't send it back to sleep. While armed, the tooltip (Windows) or the
+submenu's title (GNOME) says so, and the submenu lists the terminals it is still waiting for.
+
+**Good to know**
+
+- It is real sleep, not hibernation.
+- *Done* means Claude ended its turn. A turn that ends on a question for you
+  counts as done; a turn waiting on a permission prompt counts as still
+  working.
+- A command Claude left running **in the background** isn't seen: if the
+  turn ends while it runs, the PC can go to sleep under it.
+- A terminal interrupted with Esc never reports that its turn ended, so it
+  holds sleep back for up to 30 minutes. The submenu shows how long each
+  terminal has been silent; **Forget this terminal** on that one row lets
+  sleep go ahead. If it was still working after all, it reappears on its
+  next tool call.
+- A turn silent for 30 minutes straight counts as done — one very long
+  command, or a permission prompt nobody is there to answer.
+- If the PC sleeps some other way while a plan is armed (lid, power button,
+  even in the middle of the countdown), the plan is cancelled with a
+  notification rather than resumed on wake.
 
 ---
 
@@ -404,17 +479,48 @@ between them.
   you sign in as a different account the daemon snapshots it on the next
   tick. Nothing to click.
 - **See every account's usage.** A **Claude accounts** submenu lists them
-  all with their 5h / 7d usage; the active one is marked `●`. Inactive
-  accounts are polled too (their token is refreshed automatically when it
-  expires).
+  all with their 5 h / 7 d usage *and how long until each window resets*
+  (`5h 100% ↳ 51min · 7j 11% ↳ 6j 17h`); the active one is marked `●`.
+  Inactive accounts are polled too (their token is refreshed automatically
+  when it expires). The countdown is the point: a percentage tells you that
+  you're stuck, the countdown tells you whether to wait or to switch.
 - **Switch (opt-in).** Turn on **Allow switching accounts** in the
   *Accounts* tab first — it's off by default because it **writes into
   `~/.claude`**. Then pick an account → **Switch to this account**. The
   app swaps only the credential blocks (backing up `~/.claude.json`
   first) and leaves everything else alone.
 
-> Switching takes effect on the **next** `claude` launch — a running
-> session won't switch mid-flight.
+> A switch also moves the `claude` sessions you already have open, not just
+> the next one you start — see below.
+
+### Switch and carry on
+
+You hit the 5 h limit mid-task and your other account still has room.
+
+**The app offers it.** At 100 % on the 5 h window, if another stored account
+is below 90 % on its own 5 h window and hasn't hit its weekly limit, you get
+a notification and a row at the top of the menu:
+*Limit reached — switch to …*. One click and it's done. No digging through
+submenus at the moment you're blocked.
+
+**Your open terminals come with you.** This is the part that makes it worth
+doing: Claude Code re-reads its credentials while it runs, so a switch moves
+the sessions you already have open, not just the next one you start. Nothing
+is relaunched and no window is opened. Your conversation carries on where it
+was, on the other account's quota.
+
+Before switching, the app counts the running `claude` processes and tells you
+how many are about to change account. That's information, not a barrier: the
+default answer is yes. If the check can't run, it says so rather than
+pretending nothing is open.
+
+> This relies on undocumented Claude Code behaviour, the same way the usage
+> figures do. It was verified by observation, not promised by anyone. If a
+> future version pins credentials at startup, the switch would apply to your
+> next launch only.
+
+One judgement call is yours: rotating accounts to keep working past a limit
+sits in a grey area of Anthropic's usage policy.
 
 Stored accounts live in `~/.config/claude-usage-indicator/accounts/`
 (`chmod 0600` — they contain OAuth tokens, so treat them like
@@ -492,6 +598,8 @@ costs.py                    # daily API cost via ccusage (opt-in)
 sound.py                    # 80% flourish, all three platforms
 attention.py                # Claude Code hook + flag store (terminal attention)
 attention_hooks.py          # registers those hooks in ~/.claude/settings.json
+handoff.py                  # running-session probe + when to offer a switch
+standby.py                  # sleep once Claude is done, or after a delay
 trayicon.py                 # Windows: draws the percentage badge (Pillow)
 winshell.py                 # Windows: dialogs, autostart, launching (ctypes)
 install.sh / update.sh / uninstall.sh                  # Linux

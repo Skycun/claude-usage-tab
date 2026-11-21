@@ -48,16 +48,32 @@ if ($Autostart -and $NoAutostart) { Die 'Pick one of -Autostart / -NoAutostart.'
 # a multi-line capture arrives in PowerShell as an array where -match
 # silently filters instead of failing. Requiring our own marker means only
 # something that really executed our code can satisfy the check.
+#
+# Both argument lists below are [string[]] deliberately. A one-item @('-3')
+# gets unwrapped into a bare string on assignment -- PowerShell does that to
+# every single-element collection -- and @splatting a string swallows the
+# arguments that follow it. `& $py @pyArgs -m venv $Venv` then reaches
+# python.exe with no -m at all and opens an interactive REPL, leaving the
+# installer to fail on a venv that was never created. Both 5.1 and 7 do this.
 $py = $null
-$pyArgs = @()
+[string[]]$pyArgs = @()
 # venv is imported too, not just sys: a Python that cannot create one is no
 # use to us, and finding that out here gives a clear message instead of an
 # opaque failure three steps later.
-$probeCode = 'import sys, venv;print("CUSI-PY %d.%d" % sys.version_info[:2])'
+#
+# The Python string is single-quoted INSIDE a double-quoted PowerShell string,
+# and that order is not cosmetic. Windows PowerShell 5.1 drops embedded double
+# quotes when it hands an argument to a native .exe, so the reversed form
+# reaches python.exe as  print(CUSI-PY %d.%d ...  -- a SyntaxError, an empty
+# capture, and a bogus "No usable Python 3.9+ found" on a machine that has a
+# perfectly good one. PowerShell 7 fixed native argument quoting; 5.1 is what
+# most users still get from the Start menu, and the #Requires above promises
+# them this script runs.
+$probeCode = "import sys, venv;print('CUSI-PY %d.%d' % sys.version_info[:2])"
 foreach ($cand in @('py', 'python3', 'python')) {
     $found = Get-Command $cand -ErrorAction SilentlyContinue
     if (-not $found) { continue }
-    $probe = if ($cand -eq 'py') { @('-3', '-c') } else { @('-c') }
+    [string[]]$probe = if ($cand -eq 'py') { @('-3', '-c') } else { @('-c') }
     try {
         $out = & $found.Source @probe $probeCode 2>$null
     } catch {
@@ -70,7 +86,7 @@ foreach ($cand in @('py', 'python3', 'python')) {
         $minor = [int]$Matches[2]
         if ($major -gt 3 -or ($major -eq 3 -and $minor -ge 9)) {
             $py = $found.Source
-            $pyArgs = if ($cand -eq 'py') { @('-3') } else { @() }
+            [string[]]$pyArgs = if ($cand -eq 'py') { @('-3') } else { @() }
             Say "Using Python $major.$minor ($($found.Source))"
             break
         }

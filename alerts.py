@@ -122,7 +122,9 @@ class History:
                     )
             if len(lines) > MAX_LINES:
                 lines = lines[-MAX_LINES:]
-            HISTORY_PATH.write_text("\n".join(lines) + ("\n" if lines else ""))
+            HISTORY_PATH.write_text(
+                "\n".join(lines) + ("\n" if lines else ""), encoding="utf-8"
+            )
         except OSError as e:
             print(f"history: snapshot failed: {e}", file=sys.stderr)
 
@@ -130,8 +132,8 @@ class History:
         if not HISTORY_PATH.exists():
             return
         try:
-            text = HISTORY_PATH.read_text()
-        except OSError as e:
+            text = HISTORY_PATH.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as e:
             print(f"history: read failed: {e}", file=sys.stderr)
             return
         cutoff = datetime.now(timezone.utc) - timedelta(hours=RETENTION_HOURS)

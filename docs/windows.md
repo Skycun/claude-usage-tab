@@ -18,8 +18,9 @@ so only the presentation layer is new.
 ## Install
 
 ```powershell
-git clone https://github.com/Skycun/claude-usage-tab.git $HOME\claude-usage-tab
-cd $HOME\claude-usage-tab
+cd $HOME
+git clone https://github.com/Skycun/claude-usage-tab.git
+cd claude-usage-tab
 .\install-windows.ps1
 ```
 
@@ -28,7 +29,17 @@ whether to start at sign-in, and launches the app. Requires **Python 3.9+**
 (get it from [python.org](https://www.python.org/downloads/) and tick *Add
 python.exe to PATH*) and **Claude Code** signed in at least once.
 
-If PowerShell refuses to run the script, it's the execution policy:
+> [!NOTE]
+> No `~` in those commands, on purpose: PowerShell passes `~` to `git`
+> unexpanded, so `git clone ... ~/claude-usage-tab` clones into a folder
+> *literally named* `~` and the `cd` after it fails. Already have one? Your
+> clone sits at `.\~\claude-usage-tab` — move it out, then
+> `Remove-Item -LiteralPath '.\~' -Recurse`. Keep the `.\`: a bare
+> `-LiteralPath '~'` resolves to your entire user profile.
+
+Either shell will do: Windows PowerShell 5.1 (the blue one in the Start menu)
+and PowerShell 7 both run the installer. If it refuses to run the script at
+all, that's the execution policy rather than the script:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\install-windows.ps1
@@ -114,6 +125,7 @@ Nothing under `~\.claude` (Claude Code's own credentials) is ever touched.
 | File picker | GTK | `osascript` | `GetOpenFileNameW` (ctypes) |
 | Autostart | `.desktop` in `~/.config/autostart` | LaunchAgent | `HKCU\...\Run` |
 | Sounds | ffplay/mpv/paplay… | `afplay` | `winsound` (WAV) / hidden PowerShell `MediaPlayer` (mp3) |
+| Sleep when done | `systemctl suspend` | not wired yet | `SetSuspendState` (ctypes), never hibernates |
 | Python | system Python (no venv) | venv | venv |
 
 Everything else — polling, backoff on 429, multi-account switching, custom
@@ -143,6 +155,11 @@ editor) — there is no GTK window here.
    set `cost.command` in `settings.json`.
 5. **Explorer restarts.** `pystray` re-adds the icon on `WM_TASKBARCREATED`,
    so it should survive one. Worth confirming.
+6. **Sleep when done.** `SetSuspendState(False, False, False)` asks for
+   plain sleep after enabling `SeShutdownPrivilege`. On a machine with S3 it
+   sleeps; on a modern-standby (S0) laptop Windows may refuse, in which case
+   a "Could not sleep" notification says so. `powercfg /a` tells you which
+   kind you have.
 
 ## Packaging as an .exe (optional, later)
 

@@ -49,6 +49,9 @@ from gi.repository import GLib, Gtk, Notify  # noqa: E402
 
 import accounts  # noqa: E402
 import attention  # noqa: E402
+import attention_hooks  # noqa: E402
+import handoff  # noqa: E402
+import standby  # noqa: E402
 from alerts import History, evaluate_alerts  # noqa: E402
 import costs  # noqa: E402
 from api import (  # noqa: E402
@@ -69,10 +72,14 @@ from settings import (  # noqa: E402
 from strings import current_lang, detect_lang, set_lang, setup_locale, t  # noqa: E402
 from topbar import compose_label  # noqa: E402
 from formatting import (  # noqa: E402
+    format_account_usage,
+    format_clock,
     format_cost,
+    format_delay,
     format_local,
     format_remaining,
     format_stamp,
+    format_switch_confirm,
     fmt_secs as _fmt_secs,
     progress_bar,
     to_float,
@@ -96,6 +103,10 @@ UPDATE_CHECK_DELAY = 5
 # instant a turn ends, so this must not ride the usage poll.
 ATTENTION_IDLE_MS = 1000
 ATTENTION_RESCAN_SECONDS = 1.0
+# Sleep-when-done (see ``standby.py``). Its own beat, registered only while a
+# plan is armed; the hook registration is re-read on this cadence meanwhile.
+STANDBY_BEAT_MS = 1000
+STANDBY_HOOKS_RECHECK_SECONDS = 60.0
 UPDATE_CHECK_PERIOD = updates.PERIODIC_INTERVAL
 # Snapshot the history to disk every Nth tick (~10 min at the default cadence).
 HISTORY_SNAPSHOT_EVERY = 5
@@ -230,6 +241,25 @@ class Indicator:
         self._blink_on = False
         self._att_next_scan = 0.0
 
+        # Standing offer to hand the work to another account when the active
+        # one runs dry; the flag keeps the notification to one per episode.
+        self._offer: handoff.Offer | None = None
+        self._offer_notified = False
+
+        # Sleep-when-done: the armed plan (``None`` when off), the running
+        # turns as of the last beat, and what the menu last showed of both —
+        # so the submenu is rebuilt when that moves, not every second.
+        # ``_sleep_pending`` bridges the beat that decides to sleep and the
+        # low-priority callback that does it (see ``_standby_step``).
+        self._standby: standby.Plan | None = None
+        self._turns: tuple[attention.Turn, ...] = ()
+        self._standby_source_id: int | None = None
+        self._standby_signature: tuple | None = None
+        self._standby_hooks_due = 0.0
+        self._turns_error = ""
+        self._hooks_installed: bool | None = None
+        self._sleep_pending = False
+
         self.ind = AppIndicator.Indicator.new(
             APP_ID,
             pick_icon(0, 0),
@@ -242,6 +272,7 @@ class Indicator:
         self._set_connected(self.token is not None)
         self._apply_update_ui()  # reflect any cached "update available" now
         self._apply_cost_ui()  # ditto for the last known cost figures
+        self._refresh_standby_view()
         self.ind.set_menu(self.menu)
         self.sync_blink_timer()
         Notify.init(APP_ID)
@@ -297,6 +328,26 @@ class Indicator:
         self.item_clear_alerts = Gtk.MenuItem(label=t("clear_alerts"))
         self.item_clear_alerts.connect("activate", self._on_clear_alerts)
 
+        # Limit-reached handoff — hidden until the active account runs dry
+        # and another one has room.
+        self.item_offer = Gtk.MenuItem(label="")
+        self.item_offer.connect("activate", self._on_offer_clicked)
+        self.sep_offer = Gtk.SeparatorMenuItem()
+
+        # Sleep countdown — top-level on purpose: a minute from sleeping, the
+        # way out must be one click, with no submenu to find first.
+        self.item_standby_countdown = Gtk.MenuItem(label="")
+        self.item_standby_countdown.connect(
+            "activate", lambda _i: self._on_standby_cancel()
+        )
+        self.sep_standby_countdown = Gtk.SeparatorMenuItem()
+
+        # Sleep submenu — rebuilt by ``_refresh_standby_view``.
+        self.item_standby = Gtk.MenuItem(label=t("sb_menu"))
+        self.standby_submenu = Gtk.Menu()
+        self.item_standby.set_submenu(self.standby_submenu)
+        self.sep_standby = Gtk.SeparatorMenuItem()
+
         # Terminal-attention block — hidden until a session is flagged.
         self.item_attention = self._info_item("")
         self.item_attention_clear = Gtk.MenuItem(label=t("att_clear"))
@@ -326,9 +377,15 @@ class Indicator:
             self.item_extra,
             self.item_accounts,
             self.item_costs,
+            self.sep_offer,
+            self.item_offer,
+            self.sep_standby_countdown,
+            self.item_standby_countdown,
             self.sep_attention,
             self.item_attention,
             self.item_attention_clear,
+            self.sep_standby,
+            self.item_standby,
             self.sep_alerts,
             self.item_active_alerts,
             self.item_clear_alerts,
@@ -357,12 +414,16 @@ class Indicator:
             self.item_attention,
             self.item_attention_clear,
         )
+        self._offer_only = (self.sep_offer, self.item_offer)
         self.menu.show_all()
         # Alert block is hidden until an alert fires.
         for item in self._alert_only:
             item.hide()
         # Attention block is hidden until a Claude terminal flags itself.
         for item in self._attention_only:
+            item.hide()
+        # Offer row is hidden until the active account is actually blocked.
+        for item in self._offer_only:
             item.hide()
         # Extra row hidden by default — only shown when extra credits enabled.
         self.item_extra.hide()
@@ -372,6 +433,12 @@ class Indicator:
         self.item_update.hide()
         # Cost row hidden unless the (opt-in) feature is enabled.
         self.item_costs.hide()
+        # Sleep rows: the countdown only while one runs, the submenu only on
+        # a platform where the suspend path has been wired.
+        self.sep_standby_countdown.hide()
+        self.item_standby_countdown.hide()
+        self.sep_standby.hide()
+        self.item_standby.hide()
 
     @staticmethod
     def _info_item(label: str) -> Gtk.MenuItem:
@@ -488,6 +555,11 @@ class Indicator:
 
     def _on_settings_closed(self) -> None:
         self._settings_window = None
+        # The dialog is where the hooks get installed or removed: re-read
+        # them now rather than at the next minute's recheck.
+        self._refresh_hook_state()
+        self._cancel_if_hooks_gone()
+        self._refresh_standby_view()
 
     def _test_sound(self, snd: SoundSettings) -> None:
         """Preview the (possibly unsaved) sound settings from the dialog."""
@@ -747,6 +819,259 @@ class Indicator:
         self._blink_on = False
         self.ind.set_icon_full(self.current_icon or _gray_icon(), "Claude usage")
 
+    # ------------------------------------------------------- sleep when done
+
+    def _standby_tick(self) -> bool:
+        """GLib beat of an armed plan. Removes itself once disarmed."""
+        try:
+            self._standby_step()
+        except Exception as e:  # noqa: BLE001 — a beat must not kill the daemon
+            print(f"standby error: {type(e).__name__}: {e}", file=sys.stderr)
+        if self._standby is None:
+            self._standby_source_id = None
+            return False
+        return True
+
+    def _standby_step(self) -> None:
+        """One beat of an armed plan. Main loop only."""
+        plan = self._standby
+        if plan is None:
+            return
+        if plan.mode == standby.MODE_FINISHED and not self._standby_hooks_ok():
+            # Nothing refreshes a running turn any more: it would go stale,
+            # read as finished, and sleep the machine under live work.
+            self._on_standby_cancel()
+            self.notify(t("sb_menu"), t("sb_needs_hooks"))
+            return
+        try:
+            self._turns = attention.turns()
+        except OSError as e:
+            # Not "nothing is running" — hold the plan exactly where it is.
+            # Logged once per distinct error, not once a second.
+            if str(e) != self._turns_error:
+                self._turns_error = str(e)
+                print(f"standby: turns unreadable: {e}", file=sys.stderr)
+            return
+        self._turns_error = ""
+        nxt, event = standby.advance(
+            plan, time.time(), standby.awake_clock(), bool(self._turns)
+        )
+        self._standby = nxt
+        if event == standby.EVENT_SLEEP:
+            # Disarmed *before* the call, and the call itself deferred to a
+            # low-priority idle: a Cancel click that queued up while the main
+            # loop was busy (a slow poll is synchronous here) is dispatched
+            # first and clears ``_sleep_pending`` before anything sleeps.
+            self._turns = ()
+            self._sleep_pending = True
+            self._refresh_standby_view()
+            GLib.idle_add(self._standby_suspend, priority=GLib.PRIORITY_LOW)
+            return
+        if event == standby.EVENT_COUNTDOWN:
+            body = (
+                "sb_countdown_finish"
+                if plan.mode == standby.MODE_FINISHED
+                else "sb_countdown_delay"
+            )
+            self.notify(t("sb_countdown_title", s=standby.GRACE_SECONDS), t(body))
+        elif event == standby.EVENT_RESUMED:
+            self.notify(t("sb_resumed_title"), t("sb_resumed_body"))
+        elif event == standby.EVENT_SLEPT:
+            self._turns = ()
+            self.notify(t("sb_missed_title"), t("sb_missed_body"))
+        self._refresh_standby_view()
+
+    def _standby_suspend(self) -> bool:
+        """The deferred half of ``EVENT_SLEEP``. One-shot idle source."""
+        if not self._sleep_pending:
+            return False  # cancelled in between
+        self._sleep_pending = False
+        if not standby.suspend():
+            self.notify(t("sb_failed_title"), t("sb_failed_body"))
+        return False
+
+    def _refresh_hook_state(self) -> None:
+        try:
+            self._hooks_installed = attention_hooks.installed()
+        except Exception as e:  # noqa: BLE001 — unreadable settings = not installed
+            print(f"standby: hook state unreadable: {e}", file=sys.stderr)
+            self._hooks_installed = False
+
+    def _standby_hooks_ok(self) -> bool:
+        """Hook registration, re-read once a minute while a plan waits on it."""
+        now = time.monotonic()
+        if now >= self._standby_hooks_due:
+            self._refresh_hook_state()
+            self._standby_hooks_due = now + STANDBY_HOOKS_RECHECK_SECONDS
+        return bool(self._hooks_installed)
+
+    def _cancel_if_hooks_gone(self) -> None:
+        plan = self._standby
+        if (
+            plan is not None
+            and plan.mode == standby.MODE_FINISHED
+            and not self._hooks_installed
+        ):
+            self._on_standby_cancel()
+            self.notify(t("sb_menu"), t("sb_needs_hooks"))
+
+    def _standby_label(self) -> str:
+        """What is armed, in one line — or "" when nothing is."""
+        plan = self._standby
+        if plan is None:
+            return ""
+        if plan.sleep_at is not None:
+            return t("sb_armed_delay", time=format_clock(plan.sleep_at, seconds=True))
+        if plan.mode == standby.MODE_DELAY and plan.due is not None:
+            return t("sb_armed_delay", time=format_clock(plan.due))
+        return t("sb_armed_finish")
+
+    def _refresh_standby_view(self, force: bool = False) -> None:
+        """Relabel the rows and rebuild the submenu, only when they moved.
+
+        Idle ages are in the signature at minute resolution, which is what
+        the rows print — so a waiting plan costs one rebuild a minute at
+        most, not one a second.
+        """
+        if not standby.supported():
+            return
+        plan = self._standby
+        if plan is None and self._hooks_installed is None:
+            self._refresh_hook_state()
+        now = time.time()
+        signature = (
+            self._standby_label(),
+            plan.seen_busy if plan else False,
+            None if plan else bool(self._hooks_installed),
+            tuple((turn.session_id, int(now - turn.ts) // 60) for turn in self._turns),
+        )
+        if not force and signature == self._standby_signature:
+            return
+        self._standby_signature = signature
+
+        self.item_standby.set_label(self._standby_label() or t("sb_menu"))
+        for child in self.standby_submenu.get_children():
+            self.standby_submenu.remove(child)
+        for item in self._standby_items():
+            self.standby_submenu.append(item)
+        self.standby_submenu.show_all()
+        self.sep_standby.show()
+        self.item_standby.show()
+
+        counting = plan is not None and plan.sleep_at is not None
+        if counting:
+            self.item_standby_countdown.set_label(
+                t("sb_countdown_row", time=format_clock(plan.sleep_at, seconds=True))
+            )
+        for item in (self.sep_standby_countdown, self.item_standby_countdown):
+            (item.show if counting else item.hide)()
+
+    def _standby_items(self) -> list[Gtk.MenuItem]:
+        """The two ways to arm it, or — once armed — what it waits on."""
+        plan = self._standby
+        items: list[Gtk.MenuItem] = []
+        if plan is None:
+            hooks = bool(self._hooks_installed)
+            finish = Gtk.MenuItem(label=t("sb_finish"))
+            finish.set_sensitive(hooks)
+            finish.connect("activate", lambda _i: self._on_standby_finish())
+            items.append(finish)
+            if not hooks:
+                items.append(self._info_item(t("sb_needs_hooks")))
+            items.append(Gtk.SeparatorMenuItem())
+            for minutes in standby.DELAY_PRESETS:
+                row = Gtk.MenuItem(label=format_delay(minutes))
+                row.connect(
+                    "activate", lambda _i, m=minutes: self._on_standby_delay(m)
+                )
+                items.append(row)
+            return items
+
+        if plan.mode == standby.MODE_FINISHED:
+            now = time.time()
+            for turn in self._turns:
+                items.append(self._standby_turn_item(turn, now))
+            if self._turns:
+                items.append(Gtk.SeparatorMenuItem())
+            elif not plan.seen_busy:
+                items.append(self._info_item(t("sb_none_running")))
+                items.append(Gtk.SeparatorMenuItem())
+        cancel = Gtk.MenuItem(label=t("sb_cancel"))
+        cancel.connect("activate", lambda _i: self._on_standby_cancel())
+        items.append(cancel)
+        return items
+
+    def _standby_turn_item(self, turn: attention.Turn, now: float) -> Gtk.MenuItem:
+        """One running terminal, with its silence and a way to forget it.
+
+        The silence is printed so the user can tell an Esc-interrupted
+        terminal (which never fires the Stop that would close it) from one
+        deep in a long command, and forget only the former.
+        """
+        project = turn.project or turn.session_id[:12]
+        idle = int(now - turn.ts)
+        label = (
+            t("sb_running_idle", project=project, d=_fmt_secs(idle))
+            if idle >= 60
+            else t("sb_running", project=project)
+        )
+        item = Gtk.MenuItem(label=label)
+        sub = Gtk.Menu()
+        forget = Gtk.MenuItem(label=t("sb_forget_one"))
+        forget.connect(
+            "activate", lambda _i, sid=turn.session_id: self._on_standby_forget(sid)
+        )
+        sub.append(forget)
+        item.set_submenu(sub)
+        return item
+
+    def _arm_standby(self, plan: standby.Plan) -> None:
+        self._standby = plan
+        self._sleep_pending = False
+        self._turns = ()  # the first beat reads them
+        self._standby_hooks_due = time.monotonic() + STANDBY_HOOKS_RECHECK_SECONDS
+        if self._standby_source_id is None:
+            self._standby_source_id = GLib.timeout_add(
+                STANDBY_BEAT_MS, self._standby_tick
+            )
+        self.notify(t("sb_armed_title"), self._standby_label())
+        self._refresh_standby_view()
+
+    def _on_standby_finish(self) -> None:
+        # Re-read rather than trust the cache: the hooks may have been
+        # installed or removed by hand since the menu was last built.
+        self._refresh_hook_state()
+        if not self._hooks_installed:
+            self.notify(t("sb_menu"), t("sb_needs_hooks"))
+            self._refresh_standby_view()
+            return
+        self._arm_standby(standby.after_finish(time.time(), standby.awake_clock()))
+
+    def _on_standby_delay(self, minutes: int) -> None:
+        self._arm_standby(
+            standby.after_delay(minutes, time.time(), standby.awake_clock())
+        )
+
+    def _on_standby_cancel(self) -> None:
+        self._standby = None
+        self._sleep_pending = False
+        self._turns = ()
+        if self._standby_source_id is not None:
+            GLib.source_remove(self._standby_source_id)
+            self._standby_source_id = None
+        self._refresh_standby_view()
+
+    def _on_standby_forget(self, session_id: str) -> None:
+        """Drop one turn the user says is over — typically an Esc interrupt.
+
+        One at a time, never all: only the user can tell a dead turn from a
+        live one deep in a long tool call. If that one was alive after all,
+        its next hook opens it again.
+        """
+        attention.close_turn(session_id)
+        self._turns = tuple(t_ for t_ in self._turns if t_.session_id != session_id)
+        self._refresh_standby_view()
+
     def _relabel_static(self) -> None:
         """Re-translate menu items that don't refresh on the render path."""
         self.item_login.set_label(t("login_item"))
@@ -755,6 +1080,7 @@ class Indicator:
         self.item_edit_settings.set_label(t("edit_settings"))
         self._apply_cost_ui()
         self._refresh_attention_menu()
+        self._refresh_standby_view(force=True)
 
     def _apply_loaded_settings(self, old: Settings) -> None:
         """React to a freshly loaded ``self.settings`` (lang, poll cadence)."""
@@ -818,6 +1144,14 @@ class Indicator:
             self._run_tick()
         except Exception as e:  # noqa: BLE001 — last-resort daemon guard
             print(f"tick error: {type(e).__name__}: {e}", file=sys.stderr)
+        try:
+            # Idle sleep submenu: picks up hooks installed or removed by hand
+            # since the last tick. Cheap — rebuilt only when something moved.
+            if self._standby is None:
+                self._refresh_hook_state()
+            self._refresh_standby_view()
+        except Exception as e:  # noqa: BLE001 — same guard as above
+            print(f"standby view error: {type(e).__name__}: {e}", file=sys.stderr)
         return True
 
     def _run_tick(self) -> None:
@@ -984,6 +1318,69 @@ class Indicator:
         # --- Multi-account submenu ---
         self._render_accounts(account_states or [])
 
+        # --- Limit-reached handoff offer ---
+        self._refresh_offer(claude_state, account_states or [])
+
+    # -- limit-reached handoff offer -------------------------------------
+
+    def _refresh_offer(
+        self, claude_state: dict | None, account_states: list[dict]
+    ) -> None:
+        """Work out whether to offer a switch, and say so once per episode.
+
+        Only meaningful with the switcher enabled: proposing a move the user
+        has not allowed would advertise a disabled feature.
+        """
+        enabled = (
+            self.settings.accounts_enabled and self.settings.account_switch_enabled
+        )
+        if enabled:
+            data = (claude_state or {}).get("data") or {}
+            active_util = to_float((data.get("five_hour") or {}).get("utilization"))
+            candidates = [
+                handoff.Candidate(
+                    account_id=st["acct"].id,
+                    email=st["acct"].email or st["acct"].label,
+                    session_util=to_float(
+                        (st["data"].get("five_hour") or {}).get("utilization")
+                    ),
+                    weekly_util=to_float(
+                        (st["data"].get("seven_day") or {}).get("utilization")
+                    ),
+                )
+                for st in account_states
+                if not st.get("active") and st.get("status") == "ok" and st.get("data")
+            ]
+            self._offer = handoff.pick_offer(active_util, candidates)
+        else:
+            self._offer = None
+
+        if self._offer is None:
+            # Cleared on the way back down, so the next limit notifies again.
+            self._offer_notified = False
+            for item in self._offer_only:
+                item.hide()
+            return
+
+        self.item_offer.set_label(t("ho_offer_row", email=self._offer.email))
+        for item in self._offer_only:
+            item.show()
+        if not self._offer_notified:
+            self._offer_notified = True
+            self.notify(
+                t("ho_offer_title"),
+                t(
+                    "ho_offer_body",
+                    email=self._offer.email,
+                    util=int(self._offer.util),
+                ),
+            )
+
+    def _on_offer_clicked(self, _item: Gtk.MenuItem) -> None:
+        offer = self._offer
+        if offer is not None:
+            self._on_switch_account(offer.account_id, offer.email)
+
     # -- accounts --------------------------------------------------------
 
     def _tick_accounts(
@@ -1065,9 +1462,14 @@ class Indicator:
         status = st.get("status")
         if status == "ok" and st.get("data"):
             data = st["data"]
-            five = to_float((data.get("five_hour") or {}).get("utilization"))
-            seven = to_float((data.get("seven_day") or {}).get("utilization"))
-            return t("acct_usage", five=five, seven=seven)
+            five = data.get("five_hour") or {}
+            seven = data.get("seven_day") or {}
+            return format_account_usage(
+                to_float(five.get("utilization")),
+                to_float(seven.get("utilization")),
+                parse_iso(five.get("resets_at")),
+                parse_iso(seven.get("resets_at")),
+            )
         if status == "rate_limited":
             return t("acct_usage_rl")
         if status == "expired":
@@ -1100,6 +1502,7 @@ class Indicator:
             )
         sub.append(switch_item)
 
+
         forget_item = Gtk.MenuItem(label=t("acct_forget"))
         if active:
             forget_item.set_sensitive(False)
@@ -1114,9 +1517,18 @@ class Indicator:
         return item
 
     def _on_switch_account(self, acct_id: str, email: str) -> None:
+        """Confirm once, then swap.
+
+        The running-session count rides inside the confirmation body
+        (non-negotiable 8): it says what the switch is about to move, and
+        the default answer is yes. Open terminals follow the credentials
+        file, which is the point of the feature, not a hazard, so it does
+        not deserve a warning of its own.
+        """
+        probe = handoff.running_sessions()
         if not self._confirm(
             t("acct_switch_confirm_title"),
-            t("acct_switch_confirm_body", email=email),
+            format_switch_confirm(email, probe.count, probe.known),
         ):
             return
         if accounts.switch_to(acct_id, datetime.now(timezone.utc)):

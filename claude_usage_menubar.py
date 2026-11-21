@@ -34,16 +34,19 @@ import accounts
 import attention
 import attention_hooks
 import costs
+import handoff
 import sound
 import updates
 from alerts import History, evaluate_alerts
 from api import fetch_usage, parse_iso, read_account, read_token
 from formatting import (
     fmt_secs,
+    format_account_usage,
     format_cost,
     format_local,
     format_remaining,
     format_stamp,
+    format_switch_confirm,
     progress_bar,
     to_float,
 )
@@ -227,6 +230,12 @@ class ClaudeUsageApp(rumps.App):
         self._att_next_scan = 0.0
         self._next_flip = 0.0
         self._hooks_installed: bool | None = None
+
+        # Standing offer to hand the work to another account when the active
+        # one runs dry; the flag keeps the banner to one per episode.
+        self._offer: handoff.Offer | None = None
+        self._offer_notified = False
+
         self._blink = rumps.Timer(self._blink_tick, ATTENTION_BEAT)
         self._sync_blink_timer()
 
@@ -391,9 +400,14 @@ class ClaudeUsageApp(rumps.App):
         status = st.get("status")
         if status == "ok" and st.get("data"):
             data = st["data"]
-            five = to_float((data.get("five_hour") or {}).get("utilization"))
-            seven = to_float((data.get("seven_day") or {}).get("utilization"))
-            return t("acct_usage", five=five, seven=seven)
+            five = data.get("five_hour") or {}
+            seven = data.get("seven_day") or {}
+            return format_account_usage(
+                to_float(five.get("utilization")),
+                to_float(seven.get("utilization")),
+                parse_iso(five.get("resets_at")),
+                parse_iso(seven.get("resets_at")),
+            )
         if status == "rate_limited":
             return t("acct_usage_rl")
         if status == "expired":
@@ -445,7 +459,58 @@ class ClaudeUsageApp(rumps.App):
             self._title_body = body.strip() or "C"
         self._apply_title()
 
+        self._refresh_offer(claude_state)
         self._render_menu(claude_state)
+
+    def _refresh_offer(self, claude_state: dict | None) -> None:
+        """Whether to offer a switch, and say so once per limit episode.
+
+        Only meaningful with the switcher enabled: proposing a move the user
+        has not allowed would advertise a disabled feature.
+        """
+        if not (
+            self.settings.accounts_enabled and self.settings.account_switch_enabled
+        ):
+            self._offer = None
+            self._offer_notified = False
+            return
+
+        data = (claude_state or {}).get("data") or {}
+        active_util = to_float((data.get("five_hour") or {}).get("utilization"))
+        candidates = [
+            handoff.Candidate(
+                account_id=st["acct"].id,
+                email=st["acct"].email or st["acct"].label,
+                session_util=to_float(
+                    (st["data"].get("five_hour") or {}).get("utilization")
+                ),
+                weekly_util=to_float(
+                    (st["data"].get("seven_day") or {}).get("utilization")
+                ),
+            )
+            for st in self.account_states
+            if not st.get("active") and st.get("status") == "ok" and st.get("data")
+        ]
+        self._offer = handoff.pick_offer(active_util, candidates)
+
+        if self._offer is None:
+            self._offer_notified = False
+            return
+        if not self._offer_notified:
+            self._offer_notified = True
+            notify(
+                t("ho_offer_title"),
+                t(
+                    "ho_offer_body",
+                    email=self._offer.email,
+                    util=int(self._offer.util),
+                ),
+            )
+
+    def _on_offer(self, _sender: object = None) -> None:
+        offer = self._offer
+        if offer is not None:
+            self._on_switch(offer.account_id, offer.email)
 
     def _on_fresh_tick(self, data: dict, now: datetime) -> set[str]:
         five = data.get("five_hour") or {}
@@ -636,6 +701,17 @@ class ClaudeUsageApp(rumps.App):
             m.add(rumps.MenuItem(t("login_item"), callback=self._on_login))
         for line in self._metric_lines(data):
             m.add(rumps.MenuItem(line))  # no callback → disabled info row
+
+        if self._offer is not None:
+            # Top of the menu on purpose: this row exists because the user is
+            # blocked right now, and it is what they opened the menu for.
+            m.add(rumps.separator)
+            m.add(
+                rumps.MenuItem(
+                    t("ho_offer_row", email=self._offer.email),
+                    callback=self._on_offer,
+                )
+            )
 
         if self.settings.attention.enabled and self._attention.total:
             m.add(rumps.separator)
@@ -1073,9 +1149,18 @@ class ClaudeUsageApp(rumps.App):
             notify(t("update_spawn_fail_title"), t("update_spawn_fail_body"))
 
     def _on_switch(self, acct_id: str, email: str) -> None:
+        """Confirm once, then swap.
+
+        The running-session count rides inside the confirmation body
+        (non-negotiable 8): it says what the switch is about to move, and
+        the default answer is yes. Open terminals follow the credentials
+        file, which is the point of the feature, not a hazard, so it does
+        not deserve a warning of its own.
+        """
+        probe = handoff.running_sessions()
         if rumps.alert(
             title=t("acct_switch_confirm_title"),
-            message=t("acct_switch_confirm_body", email=email),
+            message=format_switch_confirm(email, probe.count, probe.known),
             ok=t("acct_switch"),
             cancel=t("dlg_cancel"),
         ) != 1:

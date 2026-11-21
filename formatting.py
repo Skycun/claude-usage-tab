@@ -54,6 +54,53 @@ def format_remaining(reset: datetime | None) -> str:
     return t("duration_minutes", m=minutes)
 
 
+def format_account_usage(
+    five: float,
+    seven: float,
+    five_reset: datetime | None = None,
+    seven_reset: datetime | None = None,
+) -> str:
+    """One account's row body: both windows, and when each frees up.
+
+    A percentage alone does not answer the question you actually have in
+    front of the accounts menu, which is "can I work on this one, and if not,
+    when". Shared by the three front-ends because they had three identical
+    copies of the percentage-only version, which is how they drift.
+
+    Falls back to the bare percentages when the payload carried no reset
+    time at all — a row of dashes would be noise, not information.
+    """
+    if five_reset is None and seven_reset is None:
+        return t("acct_usage", five=five, seven=seven)
+    return t(
+        "acct_usage_reset",
+        five=five,
+        seven=seven,
+        fr=format_remaining(five_reset),
+        sr=format_remaining(seven_reset),
+    )
+
+
+def format_switch_confirm(email: str, count: int, known: bool = True) -> str:
+    """The single question a switch asks, plus what it is about to move.
+
+    Non-negotiable 8 wants the running-session count in front of the user
+    before ``accounts.switch_to``. It rides inside this body rather than in
+    a dialog of its own: open terminals following the credentials file is
+    the feature, not a hazard, so it is worth a sentence and not a second
+    click.
+
+    ``known=False`` means the probe could not run, and is worded for that
+    uncertainty instead of being read as "nothing is open".
+    """
+    body = t("acct_switch_confirm_body", email=email)
+    if count > 0:
+        return f"{body}\n\n{t('ho_busy_body', n=count)}"
+    if not known:
+        return f"{body}\n\n{t('ho_unknown_body')}"
+    return body
+
+
 def format_local(reset: datetime | None) -> str:
     """Absolute reset time in the user's locale (for notifications)."""
     if not reset:
@@ -86,6 +133,22 @@ def format_stamp(ts: float) -> str:
     if not ts:
         return t("dash")
     return datetime.fromtimestamp(ts).strftime(t("date_format"))
+
+
+def format_delay(minutes: int) -> str:
+    """Menu label for one of ``standby.DELAY_PRESETS`` — ``In 30 min`` / ``In 2 h``."""
+    if minutes >= 60 and minutes % 60 == 0:
+        return t("sb_in_hours", h=minutes // 60)
+    return t("sb_in_minutes", m=minutes)
+
+
+def format_clock(ts: float, seconds: bool = False) -> str:
+    """Local time of day for a unix timestamp — ``23:45``, or ``23:45:30``.
+
+    No date on purpose: the standby delays top out at a few hours, so the
+    next occurrence of that time is the only one it can mean.
+    """
+    return datetime.fromtimestamp(ts).strftime("%H:%M:%S" if seconds else "%H:%M")
 
 
 def fmt_secs(secs: int) -> str:
